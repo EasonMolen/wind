@@ -21,7 +21,7 @@ type Server struct {
 	bindings map[string]*binding // key: handlerID
 }
 
-func NewKeyServer() *Server {
+func NewKeyServer() KeyServer {
 	return &Server{
 		bindings: make(map[string]*binding),
 	}

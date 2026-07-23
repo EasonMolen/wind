@@ -3,11 +3,8 @@
 package icon
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"image"
-	_ "image/png" // 必须显式引入 png 解码器，否则 image.Decode 会失败
 	"path/filepath"
 	"syscall"
 	"unsafe"
@@ -45,68 +42,17 @@ type SHFILEINFOW struct {
 	TypeName    [80]uint16
 }
 
-// GdiplusStartupInput GDI+ 初始化参数
-type GdiplusStartupInput struct {
-	GdiplusVersion           uint32
-	DebugEventCallback       uintptr
-	SuppressBackgroundThread int32
-	SuppressExternalCodecs   int32
-}
-
 var (
 	// Windows 系统 DLL 延迟加载
-	modshell32  = syscall.NewLazyDLL("shell32.dll")
-	moduser32   = syscall.NewLazyDLL("user32.dll")
-	modgdiplus  = syscall.NewLazyDLL("gdiplus.dll")
-	modole32    = syscall.NewLazyDLL("ole32.dll")
-	modkernel32 = syscall.NewLazyDLL("kernel32.dll")
+	modshell32 = syscall.NewLazyDLL("shell32.dll")
 
 	// Shell32 API
 	procSHGetFileInfoW = modshell32.NewProc("SHGetFileInfoW")
 	procSHGetImageList = modshell32.NewProc("SHGetImageList")
 
-	// User32 API
-	procDestroyIcon = moduser32.NewProc("DestroyIcon")
-
-	// GDI+ API
-	procGdiplusStartup            = modgdiplus.NewProc("GdiplusStartup")
-	procGdipCreateBitmapFromHICON = modgdiplus.NewProc("GdipCreateBitmapFromHICON")
-	procGdipSaveImageToStream     = modgdiplus.NewProc("GdipSaveImageToStream")
-	procGdipDisposeImage          = modgdiplus.NewProc("GdipDisposeImage")
-
-	// Ole32 API
-	procCreateStreamOnHGlobal = modole32.NewProc("CreateStreamOnHGlobal")
-	procGetHGlobalFromStream  = modole32.NewProc("GetHGlobalFromStream")
-
-	// Kernel32 API
-	procGlobalLock   = modkernel32.NewProc("GlobalLock")
-	procGlobalSize   = modkernel32.NewProc("GlobalSize")
-	procGlobalUnlock = modkernel32.NewProc("GlobalUnlock")
-
 	// IImageList COM 接口 GUID
 	IID_IImageList = GUID{0x46EB5926, 0x582E, 0x4017, [8]byte{0x9F, 0xDF, 0xE8, 0x99, 0x8D, 0xAA, 0x09, 0x50}}
-
-	// GDI+ 全局初始化 Token
-	gdiplusToken uintptr
 )
-
-type GUID struct {
-	Data1 uint32
-	Data2 uint16
-	Data3 uint16
-	Data4 [8]byte
-}
-
-func init() {
-	// 初始化 GDI+ 环境 (用于将 HICON 转换为 PNG)
-	var input GdiplusStartupInput
-	input.GdiplusVersion = 1
-	procGdiplusStartup.Call(
-		uintptr(unsafe.Pointer(&gdiplusToken)),
-		uintptr(unsafe.Pointer(&input)),
-		0,
-	)
-}
 
 // ============================================================================
 // 2. Windows Fetcher 结构定义与接口实现
@@ -171,7 +117,7 @@ func (f *winFetcher) extractIcon(ctx context.Context, pszPath uintptr, dwFileAtt
 	if size == SizeLarge || size == SizeExtraLarge {
 		hIcon, typeName, err := f.getJumboIcon(pszPath, dwFileAttributes, flags, size)
 		if err == nil && hIcon != 0 {
-			defer destroyIcon(hIcon)
+			defer DestroyHIcon(hIcon)
 			return f.convertHIconToResult(hIcon, typeName, size)
 		}
 		// 高清提取失败自动降级到普通 API
@@ -196,7 +142,7 @@ func (f *winFetcher) extractIcon(ctx context.Context, pszPath uintptr, dwFileAtt
 		return nil, ErrIconNotFound
 	}
 
-	defer destroyIcon(shfi.HIcon)
+	defer DestroyHIcon(shfi.HIcon)
 
 	typeName := syscall.UTF16ToString(shfi.TypeName[:])
 	return f.convertHIconToResult(shfi.HIcon, typeName, size)
@@ -235,11 +181,12 @@ func (f *winFetcher) getJumboIcon(pszPath uintptr, dwFileAttributes uint32, base
 	if r1 != 0 || imageList == 0 {
 		return 0, "", ErrIconNotFound
 	}
+	defer releaseCOMObject(imageList)
 
 	// 通过 COM 接口 IImageList::GetIcon(iIndex, flags, &hIcon) 获取高分辨率 HICON
 	// 虚表 GetIcon 偏移为第 10 个函数索引
 	var hIcon syscall.Handle
-	vtable := **(**uintptr)(unsafe.Pointer(imageList))
+	vtable := *(*uintptr)(unsafe.Pointer(imageList))
 	getIconProc := *(*uintptr)(unsafe.Pointer(vtable + 10*unsafe.Sizeof(uintptr(0))))
 
 	rGetIcon, _, _ := syscall.SyscallN(
@@ -251,10 +198,8 @@ func (f *winFetcher) getJumboIcon(pszPath uintptr, dwFileAttributes uint32, base
 	)
 
 	// 释放 IImageList COM 引用 (Release 为第 2 个函数)
-	releaseProc := *(*uintptr)(unsafe.Pointer(vtable + 2*unsafe.Sizeof(uintptr(0))))
-	syscall.SyscallN(releaseProc, imageList)
-
 	if rGetIcon != 0 || hIcon == 0 {
+		_ = DestroyHIcon(hIcon)
 		return 0, "", ErrIconNotFound
 	}
 
@@ -267,26 +212,14 @@ func (f *winFetcher) getJumboIcon(pszPath uintptr, dwFileAttributes uint32, base
 // ============================================================================
 
 func (f *winFetcher) convertHIconToResult(hIcon syscall.Handle, typeName string, size IconSize) (*IconResult, error) {
-	var gpBitmap uintptr
-	r1, _, _ := procGdipCreateBitmapFromHICON.Call(
-		uintptr(hIcon),
-		uintptr(unsafe.Pointer(&gpBitmap)),
-	)
-
-	// GDI+ 函数成功返回值为 0 (Ok)
-	if r1 != 0 || gpBitmap == 0 {
-		return nil, fmt.Errorf("icon: GDI+ failed to convert HICON, status: %d", r1)
-	}
-	defer procGdipDisposeImage.Call(gpBitmap)
-
-	pngBytes, err := saveGpBitmapToPNG(gpBitmap)
+	pngBytes, err := HIconToPNGBytes(hIcon)
 	if err != nil {
 		return nil, err
 	}
 
-	img, _, err := image.Decode(bytes.NewReader(pngBytes))
+	img, err := imageFromPNGBytes(pngBytes)
 	if err != nil {
-		return nil, fmt.Errorf("icon: failed to decode PNG image: %w", err)
+		return nil, err
 	}
 
 	return &IconResult{
@@ -295,66 +228,4 @@ func (f *winFetcher) convertHIconToResult(hIcon syscall.Handle, typeName string,
 		TypeName: typeName,
 		Size:     size,
 	}, nil
-}
-
-func destroyIcon(hIcon syscall.Handle) {
-	if hIcon != 0 {
-		procDestroyIcon.Call(uintptr(hIcon))
-	}
-}
-
-// saveGpBitmapToPNG 利用 GDI+ API 将 GpBitmap 保存为 PNG 字节流
-func saveGpBitmapToPNG(gpBitmap uintptr) ([]byte, error) {
-	// PNG 编码器的 CLSID: {557CF406-1A04-11D3-9A73-0000F81EF32E}
-	clsidPNG := GUID{
-		Data1: 0x557cf406,
-		Data2: 0x1a04,
-		Data3: 0x11d3,
-		Data4: [8]byte{0x9a, 0x73, 0x00, 0x00, 0xf8, 0x1e, 0xf3, 0x2e},
-	}
-
-	var stream uintptr
-	// CreateStreamOnHGlobal 成功返回 0 (S_OK)
-	r1, _, _ := procCreateStreamOnHGlobal.Call(0, 1, uintptr(unsafe.Pointer(&stream)))
-	if r1 != 0 || stream == 0 {
-		return nil, fmt.Errorf("icon: failed to create IStream, hresult: %d", r1)
-	}
-
-	vtable := **(**uintptr)(unsafe.Pointer(stream))
-	releaseProc := *(*uintptr)(unsafe.Pointer(vtable + 2*unsafe.Sizeof(uintptr(0))))
-	defer syscall.SyscallN(releaseProc, stream)
-
-	rSaved, _, _ := procGdipSaveImageToStream.Call(
-		gpBitmap,
-		stream,
-		uintptr(unsafe.Pointer(&clsidPNG)),
-		0,
-	)
-
-	if rSaved != 0 {
-		return nil, fmt.Errorf("icon: failed to save bitmap to PNG stream, status: %d", rSaved)
-	}
-
-	var hGlobal uintptr
-	rGet, _, _ := procGetHGlobalFromStream.Call(stream, uintptr(unsafe.Pointer(&hGlobal)))
-	if rGet != 0 || hGlobal == 0 {
-		return nil, fmt.Errorf("icon: failed to get HGlobal from IStream")
-	}
-
-	ptr, _, _ := procGlobalLock.Call(hGlobal)
-	if ptr == 0 {
-		return nil, fmt.Errorf("icon: failed to lock global stream handle")
-	}
-	defer procGlobalUnlock.Call(hGlobal)
-
-	size, _, _ := procGlobalSize.Call(hGlobal)
-	if size == 0 {
-		return nil, fmt.Errorf("icon: empty PNG stream size")
-	}
-
-	buf := make([]byte, size)
-	// 内存安全安全地拷贝到 Go 托管内存
-	copy(buf, (*[1 << 30]byte)(unsafe.Pointer(ptr))[:size:size])
-
-	return buf, nil
 }

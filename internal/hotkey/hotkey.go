@@ -22,8 +22,8 @@ const (
 	ModWin     uint32 = 0x0008
 )
 
-// 常见虚拟键码 (Virtual Key Codes) 映射表
-var keyMap = map[string]uint32{
+// KeyMap 常见虚拟键码 (Virtual Key Codes) 映射表
+var KeyMap = map[string]uint32{
 	// 字母 (A-Z)
 	"a": 0x41, "b": 0x42, "c": 0x43, "d": 0x44, "e": 0x45, "f": 0x46, "g": 0x47,
 	"h": 0x48, "i": 0x49, "j": 0x4A, "k": 0x4B, "l": 0x4C, "m": 0x4D, "n": 0x4E,
@@ -49,7 +49,7 @@ type Hotkey struct {
 	Key       uint32
 }
 
-type KeyServer interface {
+type KeyService interface {
 	// Register 注册一个快捷键及其对应的触发回调函数
 	// 返回一个 handlerID (便于后续取消) 或全局唯一的 error (如按键冲突 ErrHotkeyAlreadyBound)
 	Register(ctx context.Context, hk Hotkey, handler func()) (handlerID string, err error)
@@ -84,7 +84,7 @@ func ParseHotkey(hotkey string) (Hotkey, error) {
 	rawTokens := strings.Split(hotkey, "+")
 	var tokens []string
 	for _, t := range rawTokens {
-		trimmed := strings.ToUpper(strings.TrimSpace(t))
+		trimmed := strings.ToLower(strings.TrimSpace(t))
 		if trimmed != "" {
 			tokens = append(tokens, trimmed)
 		}
@@ -102,13 +102,13 @@ func ParseHotkey(hotkey string) (Hotkey, error) {
 	// 解析修饰键 (允许多个修饰键，如 Ctrl+Alt+Shift)
 	for _, mod := range modifierTokens {
 		switch mod {
-		case "ALT":
+		case "alt":
 			h.Modifiers |= ModAlt
-		case "CONTROL", "CTRL":
+		case "control", "ctrl":
 			h.Modifiers |= ModControl
-		case "SHIFT":
+		case "shift":
 			h.Modifiers |= ModShift
-		case "WIN", "SUPER":
+		case "win", "super":
 			h.Modifiers |= ModWin
 		default:
 			return h, ErrUnknownKey
@@ -126,7 +126,7 @@ func ParseHotkey(hotkey string) (Hotkey, error) {
 
 func parseMainKey(mainKeyStr string) (uint32, bool) {
 	// 先查表 (处理 F1-F12, Space, Enter 等)
-	if vk, found := keyMap[mainKeyStr]; found {
+	if vk, found := KeyMap[mainKeyStr]; found {
 		return vk, true
 	}
 

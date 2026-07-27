@@ -3,7 +3,7 @@ package search
 /*
 //#cgo CFLAGS: -I${SRCDIR}/sdk/include -D_WIN32_WINNT=0x0600
 #cgo CFLAGS: -I./sdk/include
-#cgo LDFLAGS: -L./ -lEverything64
+#cgo LDFLAGS: -L../../ -lEverything64
 
 #include <windows.h>
 #include "Everything.h"

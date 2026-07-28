@@ -7,17 +7,25 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/layout"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
 
 type SearchFunc func(keyword string) []ResultItem
 type OpenFunc func(item ResultItem)
+type TogglePinFunc func(item ResultItem) bool
+
+type GetPinDisplayNameFunc func(path string) (string, bool)
 
 type Callbacks struct {
-	Search SearchFunc
-	Open   OpenFunc
-	Hide   func()
-	Quit   func()
+	Search            SearchFunc
+	Open              OpenFunc
+	TogglePin         TogglePinFunc
+	GetPinDisplayName GetPinDisplayNameFunc
+	Hide              func()
+	Quit              func()
 }
 
 type WindowOptions struct {
@@ -60,14 +68,23 @@ func NewMainWindow(app fyne.App, opts WindowOptions) MainWindow {
 		opts.Height = 520
 	}
 
+	var window fyne.Window
+	if drv, ok := app.Driver().(desktop.Driver); ok {
+		window = drv.CreateSplashWindow()
+	} else {
+		window = app.NewWindow(opts.Title)
+	}
+
+	window.SetPadded(true)
+
 	w := &mainWindow{
-		window:     app.NewWindow(opts.Title),
-		status:     widget.NewLabel("输入关键字后按 Enter 搜索"),
+		window:     window,
+		status:     widget.NewLabel("Press Enter to search"),
 		hideOnOpen: opts.HideOnOpen,
 	}
 
 	w.entry = widget.NewEntry()
-	w.entry.SetPlaceHolder("搜索文件、目录或程序...")
+	w.entry.SetPlaceHolder("Search files, folders, or apps...")
 	w.entry.OnSubmitted = w.submitSearch
 
 	w.list = widget.NewList(
@@ -75,11 +92,7 @@ func NewMainWindow(app fyne.App, opts WindowOptions) MainWindow {
 			return len(w.results)
 		},
 		func() fyne.CanvasObject {
-			name := widget.NewLabel("")
-			name.TextStyle.Bold = true
-			path := widget.NewLabel("")
-			path.Truncation = fyne.TextTruncateEllipsis
-			return container.NewVBox(name, path)
+			return newResultListItem()
 		},
 		func(id widget.ListItemID, obj fyne.CanvasObject) {
 			if id < 0 || id >= len(w.results) {
@@ -87,27 +100,29 @@ func NewMainWindow(app fyne.App, opts WindowOptions) MainWindow {
 			}
 
 			item := w.results[id]
-			box := obj.(*fyne.Container)
-			name := box.Objects[0].(*widget.Label)
-			path := box.Objects[1].(*widget.Label)
+			row := obj.(*fyne.Container)
+			textBox := row.Objects[0].(*fyne.Container)
+			name := textBox.Objects[0].(*widget.Label)
+			path := textBox.Objects[1].(*widget.Label)
+			pinButton := row.Objects[2].(*widget.Button)
 
 			name.SetText(displayName(item))
 			path.SetText(item.FullPath)
+			setPinButtonIcon(pinButton, w.isPinned(item.FullPath))
+			pinButton.OnTapped = func() {
+				if w.callbacks.TogglePin == nil {
+					return
+				}
+
+				pinned := w.callbacks.TogglePin(item)
+				setPinButtonIcon(pinButton, pinned)
+				w.list.Refresh()
+			}
 		},
 	)
 	w.list.OnSelected = w.openSelected
 
-	toolbar := container.NewHBox(
-		widget.NewButton("搜索", func() { w.submitSearch(w.entry.Text) }),
-		widget.NewButton("隐藏", w.Hide),
-		widget.NewButton("退出", func() {
-			if w.callbacks.Quit != nil {
-				w.callbacks.Quit()
-			}
-		}),
-	)
-
-	w.window.SetContent(container.NewBorder(w.entry, container.NewVBox(w.status, toolbar), nil, nil, w.list))
+	w.window.SetContent(container.NewBorder(w.entry, w.status, nil, nil, w.list))
 	w.window.Resize(fyne.NewSize(opts.Width, opts.Height))
 	w.window.CenterOnScreen()
 	w.window.SetCloseIntercept(w.Hide)
@@ -116,6 +131,20 @@ func NewMainWindow(app fyne.App, opts WindowOptions) MainWindow {
 	})
 
 	return w
+}
+
+func newResultListItem() fyne.CanvasObject {
+	name := widget.NewLabel("")
+	name.TextStyle.Bold = true
+
+	path := widget.NewLabel("")
+	path.Wrapping = fyne.TextWrapOff
+
+	pinButton := widget.NewButtonWithIcon("", theme.ContentAddIcon(), nil)
+	pinButton.Importance = widget.LowImportance
+
+	textBox := container.NewVBox(name, path)
+	return container.NewHBox(textBox, layout.NewSpacer(), pinButton)
 }
 
 func (w *mainWindow) SetCallbacks(callbacks Callbacks) {
@@ -163,19 +192,18 @@ func (w *mainWindow) submitSearch(keyword string) {
 
 	if keyword == "" {
 		w.results = nil
-		w.status.SetText("输入关键字后按 Enter 搜索")
+		w.status.SetText("Press Enter to search")
 		w.list.Refresh()
 		return
 	}
 
 	if w.callbacks.Search == nil {
-		w.status.SetText("搜索服务尚未初始化")
+		w.status.SetText("Search callback is not configured")
 		return
 	}
 
-	w.status.SetText(fmt.Sprintf("正在搜索：%s", keyword))
+	w.status.SetText(fmt.Sprintf("Searching: %s", keyword))
 
-	// 搜索服务可能会阻塞几秒，放到后台执行，避免卡住 Fyne UI 线程。
 	go func() {
 		results := w.callbacks.Search(keyword)
 		fyne.Do(func() {
@@ -185,7 +213,7 @@ func (w *mainWindow) submitSearch(keyword string) {
 
 			w.results = results
 			w.list.Refresh()
-			w.status.SetText(fmt.Sprintf("找到 %d 个结果", len(results)))
+			w.status.SetText(fmt.Sprintf("Found %d result(s)", len(results)))
 		})
 	}()
 }
@@ -206,6 +234,15 @@ func (w *mainWindow) openSelected(id widget.ListItemID) {
 	}
 }
 
+func (w *mainWindow) isPinned(path string) bool {
+	if w.callbacks.GetPinDisplayName == nil {
+		return false
+	}
+
+	_, ok := w.callbacks.GetPinDisplayName(path)
+	return ok
+}
+
 func displayName(item ResultItem) string {
 	if item.FileName != "" {
 		return item.FileName
@@ -213,5 +250,13 @@ func displayName(item ResultItem) string {
 	if item.FullPath != "" {
 		return item.FullPath
 	}
-	return "(未知项目)"
+	return "(unknown item)"
+}
+
+func setPinButtonIcon(button *widget.Button, pinned bool) {
+	if pinned {
+		button.SetIcon(theme.ContentRemoveIcon())
+		return
+	}
+	button.SetIcon(theme.ContentAddIcon())
 }

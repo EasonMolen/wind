@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"path/filepath"
 	"time"
 	"wind/internal/config"
 	"wind/internal/hotkey"
@@ -69,9 +70,11 @@ func NewApp(fa fyne.App) (*App, error) {
 		HideOnOpen: cfg.Window.HideOnOpen,
 	})
 	a.mainWindow.SetCallbacks(ui.Callbacks{
-		Search: a.search,
-		Open:   a.open,
-		Quit:   a.Quit,
+		Search:            a.search,
+		Open:              a.open,
+		TogglePin:         a.togglePin,
+		Quit:              a.Quit,
+		GetPinDisplayName: a.config.GetPinDisplayName,
 	})
 
 	tray := ui.NewTrayMenu(fa, a.mainWindow, a.Quit)
@@ -171,6 +174,25 @@ func (a *App) open(item ui.ResultItem) {
 	}()
 }
 
+func (a *App) togglePin(item ui.ResultItem) bool {
+	if a.config == nil || item.FullPath == "" {
+		return false
+	}
+
+	pinned, err := a.config.TogglePin(item.FullPath, pinDisplayName(item))
+	if err != nil {
+		log.Printf("toggle pin failed: %v", err)
+		return false
+	}
+
+	a.cfg = a.config.Get()
+	if err := a.config.SaveConfig(); err != nil {
+		log.Printf("save config failed after toggle pin: %v", err)
+	}
+
+	return pinned
+}
+
 func (a *App) registerToggleHotkey() error {
 	if a.hotkey == nil {
 		return nil
@@ -193,4 +215,19 @@ func (a *App) registerToggleHotkey() error {
 
 	a.hotkeyHandlerID = handlerID
 	return nil
+}
+
+func pinDisplayName(item ui.ResultItem) string {
+	if item.FileName != "" {
+		return item.FileName
+	}
+	if item.FullPath == "" {
+		return ""
+	}
+
+	name := filepath.Base(item.FullPath)
+	if name != "." && name != string(filepath.Separator) {
+		return name
+	}
+	return item.FullPath
 }

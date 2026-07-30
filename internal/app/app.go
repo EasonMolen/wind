@@ -57,13 +57,14 @@ func NewApp(fa fyne.App) (*App, error) {
 	}
 
 	// 图标服务目前由全局引擎对外提供，这里集中按配置初始化，后续 UI 要显示图标时不用再关心配置来源。
-	icon.InitGlobalEngine(icon.Config{
+	iconEngine := icon.NewEngine(icon.Config{
 		CacheCapacity:    cfg.Icon.CacheCapacity,
 		DefaultTimeout:   time.Duration(cfg.Icon.DefaultTimeoutMS) * time.Millisecond,
 		EnableExtRouting: cfg.Icon.EnableExtRouting,
 	})
 
-	a.mainWindow = ui.NewMainWindow(fa, ui.WindowOptions{
+	mainWindowCtx := context.WithoutCancel(a.ctx)
+	a.mainWindow = ui.NewMainWindow(mainWindowCtx, fa, iconEngine, ui.WindowOptions{
 		Title:      cfg.Window.Title,
 		Width:      cfg.Window.Width,
 		Height:     cfg.Window.Height,
@@ -75,6 +76,8 @@ func NewApp(fa fyne.App) (*App, error) {
 		TogglePin:         a.togglePin,
 		Quit:              a.Quit,
 		GetPinDisplayName: a.config.GetPinDisplayName,
+		GetPinnedItems:    a.pinnedItems,
+		PinnedIconsNum:    a.config.PinnedNum,
 	})
 
 	tray := ui.NewTrayMenu(fa, a.mainWindow, a.Quit)
@@ -186,11 +189,31 @@ func (a *App) togglePin(item ui.ResultItem) bool {
 	}
 
 	a.cfg = a.config.Get()
-	if err := a.config.SaveConfig(); err != nil {
+	if err = a.config.SaveConfig(); err != nil {
 		log.Printf("save config failed after toggle pin: %v", err)
 	}
 
 	return pinned
+}
+
+func (a *App) pinnedItems() []ui.ResultItem {
+	if len(a.cfg.Pins) == 0 {
+		return nil
+	}
+
+	items := make([]ui.ResultItem, 0, len(a.cfg.Pins))
+	for _, pin := range a.cfg.Pins {
+		if pin.Path == "" {
+			continue
+		}
+
+		items = append(items, ui.ResultItem{
+			FullPath: pin.Path,
+			FileName: pin.Name,
+		})
+	}
+
+	return items
 }
 
 func (a *App) registerToggleHotkey() error {

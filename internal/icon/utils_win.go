@@ -49,6 +49,7 @@ var (
 	procGetHGlobalFromStream  = modole32.NewProc("GetHGlobalFromStream")
 
 	procGlobalLock   = modkernel32.NewProc("GlobalLock")
+	procGlobalSize   = modkernel32.NewProc("GlobalSize")
 	procGlobalUnlock = modkernel32.NewProc("GlobalUnlock")
 
 	gdiplusOnce  sync.Once
@@ -186,6 +187,13 @@ func copyHGlobalStreamBytes(stream uintptr) ([]byte, error) {
 	if size == 0 {
 		return nil, fmt.Errorf("icon: empty PNG stream")
 	}
+	globalSize, _, _ := procGlobalSize.Call(hGlobal)
+	if globalSize == 0 {
+		return nil, fmt.Errorf("icon: failed to get PNG stream memory size")
+	}
+	if size > uint64(globalSize) {
+		return nil, fmt.Errorf("icon: PNG stream size %d exceeds HGLOBAL size %d", size, globalSize)
+	}
 	if size > uint64(maxGoSliceLen) {
 		return nil, fmt.Errorf("icon: PNG stream too large: %d bytes", size)
 	}
@@ -196,15 +204,15 @@ func copyHGlobalStreamBytes(stream uintptr) ([]byte, error) {
 }
 
 func streamSize(stream uintptr) (uint64, error) {
-	var zero int64
 	var position uint64
 	vtable := *(*uintptr)(unsafe.Pointer(stream))
 	seekProc := *(*uintptr)(unsafe.Pointer(vtable + 5*unsafe.Sizeof(uintptr(0))))
 
+	// IStream::Seek takes LARGE_INTEGER by value, not by pointer.
 	hresult, _, _ := syscall.SyscallN(
 		seekProc,
 		stream,
-		uintptr(unsafe.Pointer(&zero)),
+		0,
 		2, // STREAM_SEEK_END
 		uintptr(unsafe.Pointer(&position)),
 	)

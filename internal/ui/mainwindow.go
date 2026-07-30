@@ -1,11 +1,17 @@
 package ui
 
 import (
+	"bytes"
+	"context"
 	"fmt"
+	"image/png"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"wind/internal/icon"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/layout"
@@ -16,14 +22,17 @@ import (
 type SearchFunc func(keyword string) []ResultItem
 type OpenFunc func(item ResultItem)
 type TogglePinFunc func(item ResultItem) bool
-
 type GetPinDisplayNameFunc func(path string) (string, bool)
+type GetPinnedItemsFunc func() []ResultItem
+type PinnedIconsNumFunc func() int
 
 type Callbacks struct {
 	Search            SearchFunc
 	Open              OpenFunc
 	TogglePin         TogglePinFunc
 	GetPinDisplayName GetPinDisplayNameFunc
+	GetPinnedItems    GetPinnedItemsFunc
+	PinnedIconsNum    PinnedIconsNumFunc
 	Hide              func()
 	Quit              func()
 }
@@ -46,18 +55,29 @@ type MainWindow interface {
 }
 
 type mainWindow struct {
-	window     fyne.Window
-	callbacks  Callbacks
-	entry      *widget.Entry
-	list       *widget.List
-	status     *widget.Label
-	results    []ResultItem
-	visible    atomic.Bool
-	searchSeq  atomic.Uint64
-	hideOnOpen bool
+	ctx         context.Context
+	window      fyne.Window
+	callbacks   Callbacks
+	entry       *widget.Entry
+	iconEngine  *icon.Engine
+	pinnedIcons *fyne.Container
+	pinnedItems []ResultItem
+	pinnedPanel *fyne.Container
+	list        *widget.List
+	status      *widget.Label
+	results     []ResultItem
+	visible     atomic.Bool
+	searchSeq   atomic.Uint64
+	hideOnOpen  bool
 }
 
-func NewMainWindow(app fyne.App, opts WindowOptions) MainWindow {
+const (
+	pinnedIconSourceSize = 64
+	pinnedIconImageSize  = 56
+	pinnedIconTileSize   = 72
+)
+
+func NewMainWindow(ctx context.Context, app fyne.App, ie *icon.Engine, opts WindowOptions) MainWindow {
 	if opts.Title == "" {
 		opts.Title = "NewWind"
 	}
@@ -78,6 +98,7 @@ func NewMainWindow(app fyne.App, opts WindowOptions) MainWindow {
 	window.SetPadded(true)
 
 	w := &mainWindow{
+		ctx:        ctx,
 		window:     window,
 		status:     widget.NewLabel("Press Enter to search"),
 		hideOnOpen: opts.HideOnOpen,
@@ -86,6 +107,18 @@ func NewMainWindow(app fyne.App, opts WindowOptions) MainWindow {
 	w.entry = widget.NewEntry()
 	w.entry.SetPlaceHolder("Search files, folders, or apps...")
 	w.entry.OnSubmitted = w.submitSearch
+
+	w.iconEngine = ie
+	w.pinnedIcons = container.NewHBox()
+
+	pinnedScroll := container.NewHScroll(w.pinnedIcons)
+	pinnedScroll.SetMinSize(fyne.NewSize(0, 92))
+
+	w.pinnedPanel = container.NewVBox(
+		//widget.NewLabel("Pinned"),
+		pinnedScroll,
+	)
+	w.pinnedPanel.Hide()
 
 	w.list = widget.NewList(
 		func() int {
@@ -116,13 +149,15 @@ func NewMainWindow(app fyne.App, opts WindowOptions) MainWindow {
 
 				pinned := w.callbacks.TogglePin(item)
 				setPinButtonIcon(pinButton, pinned)
+				w.refreshPinnedItems()
 				w.list.Refresh()
 			}
 		},
 	)
 	w.list.OnSelected = w.openSelected
 
-	w.window.SetContent(container.NewBorder(w.entry, w.status, nil, nil, w.list))
+	top := container.NewVBox(w.entry, w.pinnedPanel)
+	w.window.SetContent(container.NewBorder(top, w.status, nil, nil, w.list))
 	w.window.Resize(fyne.NewSize(opts.Width, opts.Height))
 	w.window.CenterOnScreen()
 	w.window.SetCloseIntercept(w.Hide)
@@ -149,6 +184,7 @@ func newResultListItem() fyne.CanvasObject {
 
 func (w *mainWindow) SetCallbacks(callbacks Callbacks) {
 	w.callbacks = callbacks
+	w.refreshPinnedItems()
 }
 
 func (w *mainWindow) Show() {
@@ -186,6 +222,41 @@ func (w *mainWindow) Window() fyne.Window {
 	return w.window
 }
 
+func (w *mainWindow) refreshPinnedItems() {
+	if w.pinnedIcons == nil || w.pinnedPanel == nil {
+		return
+	}
+
+	if w.callbacks.GetPinnedItems == nil {
+		w.pinnedItems = nil
+		w.pinnedIcons.Objects = nil
+		w.pinnedIcons.Refresh()
+		w.pinnedPanel.Hide()
+		w.pinnedPanel.Refresh()
+		return
+	}
+
+	w.pinnedItems = w.callbacks.GetPinnedItems()
+	objects := make([]fyne.CanvasObject, 0, len(w.pinnedItems))
+	for _, item := range w.pinnedItems {
+		item := item
+		button := newPinnedIconButton(w.itemIconResource(item), func() {
+			w.openItem(item)
+		})
+		objects = append(objects, button)
+	}
+
+	w.pinnedIcons.Objects = objects
+	w.pinnedIcons.Refresh()
+
+	if len(objects) == 0 {
+		w.pinnedPanel.Hide()
+	} else {
+		w.pinnedPanel.Show()
+	}
+	w.pinnedPanel.Refresh()
+}
+
 func (w *mainWindow) submitSearch(keyword string) {
 	keyword = strings.TrimSpace(keyword)
 	seq := w.searchSeq.Add(1)
@@ -213,7 +284,7 @@ func (w *mainWindow) submitSearch(keyword string) {
 
 			w.results = results
 			w.list.Refresh()
-			w.status.SetText(fmt.Sprintf("Found %d result(s)", len(results)))
+			w.status.SetText(fmt.Sprintf("Found %d results", len(results)))
 		})
 	}()
 }
@@ -225,7 +296,10 @@ func (w *mainWindow) openSelected(id widget.ListItemID) {
 
 	item := w.results[id]
 	w.list.UnselectAll()
+	w.openItem(item)
+}
 
+func (w *mainWindow) openItem(item ResultItem) {
 	if w.callbacks.Open != nil {
 		w.callbacks.Open(item)
 	}
@@ -259,4 +333,87 @@ func setPinButtonIcon(button *widget.Button, pinned bool) {
 		return
 	}
 	button.SetIcon(theme.ContentAddIcon())
+}
+
+func (w *mainWindow) itemIconResource(item ResultItem) fyne.Resource {
+	if w.iconEngine == nil || item.FullPath == "" {
+		return w.defaultItemIcon(item)
+	}
+
+	iconRes, err := w.iconEngine.Get(w.ctx, item.FullPath, pinnedIconSourceSize)
+	if err != nil {
+		ext := filepath.Ext(item.FullPath)
+		if ext != "" {
+			iconRes, err = w.iconEngine.GetByExtension(w.ctx, ext, pinnedIconSourceSize)
+		}
+	}
+	if err != nil || iconRes == nil {
+		return w.defaultItemIcon(item)
+	}
+
+	if len(iconRes.PNGBytes) > 0 {
+		return fyne.NewStaticResource(filepath.Base(item.FullPath), iconRes.PNGBytes)
+	}
+	if iconRes.Image == nil {
+		return w.defaultItemIcon(item)
+	}
+
+	var buf bytes.Buffer
+	if err = png.Encode(&buf, iconRes.Image); err != nil {
+		return w.defaultItemIcon(item)
+	}
+	return fyne.NewStaticResource(filepath.Base(item.FullPath), buf.Bytes())
+}
+
+func (w *mainWindow) defaultItemIcon(item ResultItem) fyne.Resource {
+	if item.IsFolder {
+		return theme.FolderIcon()
+	}
+	return theme.FileIcon()
+}
+
+func (w *mainWindow) pinnedIconsNum() int {
+	if w.callbacks.PinnedIconsNum == nil {
+		return 0
+	}
+	return w.callbacks.PinnedIconsNum()
+}
+
+type pinnedIconButton struct {
+	widget.BaseWidget
+	icon     *canvas.Image
+	onTapped func()
+}
+
+func newPinnedIconButton(resource fyne.Resource, onTapped func()) *pinnedIconButton {
+	iconImage := canvas.NewImageFromResource(resource)
+	iconImage.FillMode = canvas.ImageFillContain
+	iconImage.ScaleMode = canvas.ImageScaleSmooth
+	iconImage.SetMinSize(fyne.NewSize(pinnedIconImageSize, pinnedIconImageSize))
+
+	button := &pinnedIconButton{
+		icon:     iconImage,
+		onTapped: onTapped,
+	}
+	button.ExtendBaseWidget(button)
+	return button
+}
+
+func (b *pinnedIconButton) Tapped(*fyne.PointEvent) {
+	if b.onTapped != nil {
+		b.onTapped()
+	}
+}
+
+func (b *pinnedIconButton) TappedSecondary(*fyne.PointEvent) {}
+
+func (b *pinnedIconButton) CreateRenderer() fyne.WidgetRenderer {
+	background := canvas.NewRectangle(theme.Color(theme.ColorNameOverlayBackground))
+	background.SetMinSize(fyne.NewSize(pinnedIconTileSize, pinnedIconTileSize))
+
+	content := container.NewPadded(container.NewStack(
+		background,
+		container.NewCenter(b.icon),
+	))
+	return widget.NewSimpleRenderer(content)
 }

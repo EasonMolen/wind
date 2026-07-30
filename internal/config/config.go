@@ -62,6 +62,7 @@ type CfgService interface {
 	Path() string
 	GetPinDisplayName(path string) (string, bool)
 	TogglePin(path string, name string) (bool, error)
+	PinnedNum() int
 }
 
 type cfgService struct {
@@ -125,7 +126,7 @@ func (s *cfgService) LoadConfig() error {
 		return err
 	}
 
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	if err = json.Unmarshal(data, &cfg); err != nil {
 		return err
 	}
 
@@ -193,6 +194,8 @@ func (s *cfgService) TogglePin(path string, name string) (bool, error) {
 	defer s.mu.Unlock()
 
 	key := pinKey(cleanPath)
+
+	// 检查是否和已经存在的冲突, 如果冲突了就表明: 用户是取消固定, 应该从map中清除
 	for i, pin := range s.cfg.Pins {
 		if pinKey(pin.Path) != key {
 			continue
@@ -217,6 +220,13 @@ func (s *cfgService) TogglePin(path string, name string) (bool, error) {
 	})
 	s.syncPinMap()
 	return true, nil
+}
+
+func (s *cfgService) PinnedNum() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return len(s.pinMap)
 }
 
 func defaultConfigPath() string {

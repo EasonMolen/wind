@@ -1,3 +1,5 @@
+//go:build windows
+
 package icon
 
 import (
@@ -5,16 +7,61 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	_ "image/png"
-	"sync"
+	png "image/png"
 	"syscall"
 	"unsafe"
 )
 
 const (
-	gdipStatusOK = 0
-	sOK          = 0
+	BI_RGB          = 0
+	DIB_RGB_COLORS  = 0
+	DI_NORMAL       = 0x0003
+	defaultIconSize = 256
 )
+
+type BITMAP struct {
+	Type       int32
+	Width      int32
+	Height     int32
+	WidthBytes int32
+	Planes     uint16
+	BitsPixel  uint16
+	Bits       uintptr
+}
+
+type BITMAPINFOHEADER struct {
+	Size          uint32
+	Width         int32
+	Height        int32
+	Planes        uint16
+	BitCount      uint16
+	Compression   uint32
+	SizeImage     uint32
+	XPelsPerMeter int32
+	YPelsPerMeter int32
+	ClrUsed       uint32
+	ClrImportant  uint32
+}
+
+type RGBQUAD struct {
+	Blue     byte
+	Green    byte
+	Red      byte
+	Reserved byte
+}
+
+type BITMAPINFO struct {
+	Header BITMAPINFOHEADER
+	Colors [1]RGBQUAD
+}
+
+type ICONINFO struct {
+	FIcon    int32
+	XHotspot uint32
+	YHotspot uint32
+	HbmMask  uintptr
+	HbmColor uintptr
+}
 
 // GUID matches the Windows GUID/CLSID binary layout.
 type GUID struct {
@@ -24,73 +71,30 @@ type GUID struct {
 	Data4 [8]byte
 }
 
-// GdiplusStartupInput is the native GDI+ startup configuration.
-type GdiplusStartupInput struct {
-	GdiplusVersion           uint32
-	DebugEventCallback       uintptr
-	SuppressBackgroundThread int32
-	SuppressExternalCodecs   int32
-}
-
 var (
-	moduser32   = syscall.NewLazyDLL("user32.dll")
-	modgdiplus  = syscall.NewLazyDLL("gdiplus.dll")
-	modole32    = syscall.NewLazyDLL("ole32.dll")
-	modkernel32 = syscall.NewLazyDLL("kernel32.dll")
+	moduser32 = syscall.NewLazyDLL("user32.dll")
+	modgdi32  = syscall.NewLazyDLL("gdi32.dll")
 
-	procDestroyIcon = moduser32.NewProc("DestroyIcon")
-
-	procGdiplusStartup            = modgdiplus.NewProc("GdiplusStartup")
-	procGdipCreateBitmapFromHICON = modgdiplus.NewProc("GdipCreateBitmapFromHICON")
-	procGdipSaveImageToStream     = modgdiplus.NewProc("GdipSaveImageToStream")
-	procGdipDisposeImage          = modgdiplus.NewProc("GdipDisposeImage")
-
-	procCreateStreamOnHGlobal = modole32.NewProc("CreateStreamOnHGlobal")
-	procGetHGlobalFromStream  = modole32.NewProc("GetHGlobalFromStream")
-
-	procGlobalLock   = modkernel32.NewProc("GlobalLock")
-	procGlobalSize   = modkernel32.NewProc("GlobalSize")
-	procGlobalUnlock = modkernel32.NewProc("GlobalUnlock")
-
-	gdiplusOnce  sync.Once
-	gdiplusToken uintptr
-	gdiplusErr   error
+	procDestroyIcon  = moduser32.NewProc("DestroyIcon")
+	procDrawIconEx   = moduser32.NewProc("DrawIconEx")
+	procGetIconInfo  = moduser32.NewProc("GetIconInfo")
+	procCreateDC     = modgdi32.NewProc("CreateCompatibleDC")
+	procCreateDIB    = modgdi32.NewProc("CreateDIBSection")
+	procDeleteDC     = modgdi32.NewProc("DeleteDC")
+	procDeleteObject = modgdi32.NewProc("DeleteObject")
+	procSelectObject = modgdi32.NewProc("SelectObject")
+	procGetObjectW   = modgdi32.NewProc("GetObjectW")
+	procGdiFlush     = modgdi32.NewProc("GdiFlush")
 )
 
-// PNG encoder CLSID: {557CF406-1A04-11D3-9A73-0000F81EF32E}.
-var pngEncoderCLSID = GUID{
-	Data1: 0x557cf406,
-	Data2: 0x1a04,
-	Data3: 0x11d3,
-	Data4: [8]byte{0x9a, 0x73, 0x00, 0x00, 0xf8, 0x1e, 0xf3, 0x2e},
-}
-
-// HIconToPNGBytes converts a Windows HICON into PNG bytes held by Go memory.
-// The caller still owns hIcon and should release it with DestroyHIcon when appropriate.
+// HIconToPNGBytes 只保留透明导出路径，避免 GDI+ 兜底带来的黑底问题。
 func HIconToPNGBytes(hIcon syscall.Handle) ([]byte, error) {
 	if hIcon == 0 {
 		return nil, fmt.Errorf("icon: empty HICON")
 	}
-
-	if err := ensureGDIPlus(); err != nil {
-		return nil, err
-	}
-
-	var gpBitmap uintptr
-	status, _, _ := procGdipCreateBitmapFromHICON.Call(
-		uintptr(hIcon),
-		uintptr(unsafe.Pointer(&gpBitmap)),
-	)
-	if status != gdipStatusOK || gpBitmap == 0 {
-		return nil, fmt.Errorf("icon: GDI+ failed to create bitmap from HICON, status: %d", status)
-	}
-	defer procGdipDisposeImage.Call(gpBitmap)
-
-	return saveGpBitmapToPNG(gpBitmap)
+	return hiconToPNGBytesTransparent(hIcon)
 }
 
-// HIconToImage converts a Windows HICON into a decoded Go image.Image.
-// The caller remains responsible for releasing hIcon.
 func HIconToImage(hIcon syscall.Handle) (image.Image, error) {
 	pngBytes, err := HIconToPNGBytes(hIcon)
 	if err != nil {
@@ -99,8 +103,6 @@ func HIconToImage(hIcon syscall.Handle) (image.Image, error) {
 	return imageFromPNGBytes(pngBytes)
 }
 
-// DestroyHIcon releases an HICON returned by Shell/User APIs.
-// It is safe to call with a zero handle.
 func DestroyHIcon(hIcon syscall.Handle) error {
 	if hIcon == 0 {
 		return nil
@@ -116,26 +118,130 @@ func DestroyHIcon(hIcon syscall.Handle) error {
 	return nil
 }
 
-func ensureGDIPlus() error {
-	gdiplusOnce.Do(func() {
-		input := GdiplusStartupInput{GdiplusVersion: 1}
-		status, _, callErr := procGdiplusStartup.Call(
-			uintptr(unsafe.Pointer(&gdiplusToken)),
-			uintptr(unsafe.Pointer(&input)),
-			0,
-		)
-		if status != gdipStatusOK || gdiplusToken == 0 {
-			if !errors.Is(callErr, syscall.Errno(0)) {
-				gdiplusErr = fmt.Errorf("icon: GDI+ startup failed, status: %d: %w", status, callErr)
-				return
-			}
-			gdiplusErr = fmt.Errorf("icon: GDI+ startup failed, status: %d", status)
-			return
+func hiconToPNGBytesTransparent(hIcon syscall.Handle) ([]byte, error) {
+	width, height, err := iconCanvasSize(hIcon)
+	if err != nil {
+		return nil, err
+	}
+	if width <= 0 || height <= 0 {
+		return nil, fmt.Errorf("icon: invalid icon size %dx%d", width, height)
+	}
+
+	hdc, _, _ := procCreateDC.Call(0)
+	if hdc == 0 {
+		return nil, fmt.Errorf("icon: failed to create compatible DC")
+	}
+	defer procDeleteDC.Call(hdc)
+
+	var bits unsafe.Pointer
+	bmi := bitmapInfoForSize(width, height)
+	hBitmap, _, _ := procCreateDIB.Call(
+		hdc,
+		uintptr(unsafe.Pointer(&bmi)),
+		DIB_RGB_COLORS,
+		uintptr(unsafe.Pointer(&bits)),
+		0,
+		0,
+	)
+	if hBitmap == 0 || bits == nil {
+		return nil, fmt.Errorf("icon: failed to create DIB section")
+	}
+	defer procDeleteObject.Call(hBitmap)
+
+	oldObj, _, _ := procSelectObject.Call(hdc, hBitmap)
+	defer procSelectObject.Call(hdc, oldObj)
+
+	buf := unsafe.Slice((*byte)(bits), width*height*4)
+	for i := range buf {
+		buf[i] = 0
+	}
+
+	drawRet, _, _ := procDrawIconEx.Call(
+		hdc,
+		0,
+		0,
+		uintptr(hIcon),
+		uintptr(width),
+		uintptr(height),
+		0,
+		0,
+		DI_NORMAL,
+	)
+	if drawRet == 0 {
+		return nil, fmt.Errorf("icon: DrawIconEx failed")
+	}
+	procGdiFlush.Call()
+
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		srcRow := buf[y*width*4 : (y+1)*width*4]
+		dstRow := img.Pix[y*img.Stride : y*img.Stride+width*4]
+		for x := 0; x < width; x++ {
+			si := x * 4
+			di := x * 4
+			// DIB 内存是 BGRA，这里转成 Go 的 RGBA。
+			dstRow[di+0] = srcRow[si+2]
+			dstRow[di+1] = srcRow[si+1]
+			dstRow[di+2] = srcRow[si+0]
+			dstRow[di+3] = srcRow[si+3]
 		}
+	}
 
-	})
+	var out bytes.Buffer
+	if err = png.Encode(&out, img); err != nil {
+		return nil, fmt.Errorf("icon: failed to encode transparent PNG: %w", err)
+	}
+	return out.Bytes(), nil
+}
 
-	return gdiplusErr
+func iconCanvasSize(hIcon syscall.Handle) (int, int, error) {
+	var info ICONINFO
+	r1, _, _ := procGetIconInfo.Call(uintptr(hIcon), uintptr(unsafe.Pointer(&info)))
+	if r1 == 0 {
+		return 0, 0, fmt.Errorf("icon: GetIconInfo failed")
+	}
+	if info.HbmMask != 0 {
+		defer procDeleteObject.Call(info.HbmMask)
+	}
+	if info.HbmColor != 0 {
+		defer procDeleteObject.Call(info.HbmColor)
+	}
+
+	var bmp BITMAP
+	if info.HbmColor != 0 {
+		r2, _, _ := procGetObjectW.Call(
+			info.HbmColor,
+			uintptr(unsafe.Sizeof(bmp)),
+			uintptr(unsafe.Pointer(&bmp)),
+		)
+		if r2 != 0 && bmp.Width > 0 && bmp.Height > 0 {
+			return int(bmp.Width), int(bmp.Height), nil
+		}
+	}
+	if info.HbmMask != 0 {
+		r2, _, _ := procGetObjectW.Call(
+			info.HbmMask,
+			uintptr(unsafe.Sizeof(bmp)),
+			uintptr(unsafe.Pointer(&bmp)),
+		)
+		if r2 != 0 && bmp.Width > 0 && bmp.Height > 0 {
+			return int(bmp.Width), int(bmp.Height / 2), nil
+		}
+	}
+	return defaultIconSize, defaultIconSize, nil
+}
+
+func bitmapInfoForSize(width, height int) BITMAPINFO {
+	return BITMAPINFO{
+		Header: BITMAPINFOHEADER{
+			Size:        uint32(unsafe.Sizeof(BITMAPINFOHEADER{})),
+			Width:       int32(width),
+			Height:      int32(-height),
+			Planes:      1,
+			BitCount:    32,
+			Compression: BI_RGB,
+		},
+	}
 }
 
 func imageFromPNGBytes(pngBytes []byte) (image.Image, error) {
@@ -144,82 +250,6 @@ func imageFromPNGBytes(pngBytes []byte) (image.Image, error) {
 		return nil, fmt.Errorf("icon: failed to decode PNG image: %w", err)
 	}
 	return img, nil
-}
-
-func saveGpBitmapToPNG(gpBitmap uintptr) ([]byte, error) {
-	var stream uintptr
-	hresult, _, _ := procCreateStreamOnHGlobal.Call(0, 1, uintptr(unsafe.Pointer(&stream)))
-	if hresult != sOK || stream == 0 {
-		return nil, fmt.Errorf("icon: failed to create IStream, hresult: 0x%x", hresult)
-	}
-	defer releaseCOMObject(stream)
-
-	status, _, _ := procGdipSaveImageToStream.Call(
-		gpBitmap,
-		stream,
-		uintptr(unsafe.Pointer(&pngEncoderCLSID)),
-		0,
-	)
-	if status != gdipStatusOK {
-		return nil, fmt.Errorf("icon: failed to save bitmap to PNG stream, status: %d", status)
-	}
-
-	return copyHGlobalStreamBytes(stream)
-}
-
-func copyHGlobalStreamBytes(stream uintptr) ([]byte, error) {
-	var hGlobal uintptr
-	hresult, _, _ := procGetHGlobalFromStream.Call(stream, uintptr(unsafe.Pointer(&hGlobal)))
-	if hresult != sOK || hGlobal == 0 {
-		return nil, fmt.Errorf("icon: failed to get HGLOBAL from IStream, hresult: 0x%x", hresult)
-	}
-
-	ptr, _, _ := procGlobalLock.Call(hGlobal)
-	if ptr == 0 {
-		return nil, fmt.Errorf("icon: failed to lock PNG stream memory")
-	}
-	defer procGlobalUnlock.Call(hGlobal)
-
-	size, err := streamSize(stream)
-	if err != nil {
-		return nil, err
-	}
-	if size == 0 {
-		return nil, fmt.Errorf("icon: empty PNG stream")
-	}
-	globalSize, _, _ := procGlobalSize.Call(hGlobal)
-	if globalSize == 0 {
-		return nil, fmt.Errorf("icon: failed to get PNG stream memory size")
-	}
-	if size > uint64(globalSize) {
-		return nil, fmt.Errorf("icon: PNG stream size %d exceeds HGLOBAL size %d", size, globalSize)
-	}
-	if size > uint64(maxGoSliceLen) {
-		return nil, fmt.Errorf("icon: PNG stream too large: %d bytes", size)
-	}
-
-	buf := make([]byte, int(size))
-	copy(buf, unsafe.Slice((*byte)(unsafe.Pointer(ptr)), int(size)))
-	return buf, nil
-}
-
-func streamSize(stream uintptr) (uint64, error) {
-	var position uint64
-	vtable := *(*uintptr)(unsafe.Pointer(stream))
-	seekProc := *(*uintptr)(unsafe.Pointer(vtable + 5*unsafe.Sizeof(uintptr(0))))
-
-	// IStream::Seek takes LARGE_INTEGER by value, not by pointer.
-	hresult, _, _ := syscall.SyscallN(
-		seekProc,
-		stream,
-		0,
-		2, // STREAM_SEEK_END
-		uintptr(unsafe.Pointer(&position)),
-	)
-	if hresult != sOK {
-		return 0, fmt.Errorf("icon: failed to seek PNG stream, hresult: 0x%x", hresult)
-	}
-	return position, nil
 }
 
 func releaseCOMObject(obj uintptr) {
@@ -231,5 +261,3 @@ func releaseCOMObject(obj uintptr) {
 	releaseProc := *(*uintptr)(unsafe.Pointer(vtable + 2*unsafe.Sizeof(uintptr(0))))
 	syscall.SyscallN(releaseProc, obj)
 }
-
-const maxGoSliceLen = int(^uint(0) >> 1)

@@ -29,6 +29,19 @@ const (
 	SizeLarge IconSize = 48
 	// SizeExtraLarge 256x256 (特大图标/高清缩略图级别)
 	SizeExtraLarge IconSize = 256
+
+	// SizeList 16x16 (列表/详细信息)
+	SizeList IconSize = 16
+	// SizeToolbar 32x32 (工具栏/平铺)
+	SizeToolbar IconSize = 32
+	// SizeFolder 48x48 (桌面/文件夹)
+	SizeFolder IconSize = 48
+	// SizeGrid 64x64 (网格/启动器)
+	SizeGrid IconSize = 64
+	// SizePlugin 128x128 (插件主图标 - uTools规范)
+	SizePlugin IconSize = 128
+	// SizeThumbnail 256x256 (高清缩略图)
+	SizeThumbnail IconSize = 256
 )
 
 // Format 指定导出的图像数据格式

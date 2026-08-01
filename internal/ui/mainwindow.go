@@ -72,9 +72,12 @@ type mainWindow struct {
 }
 
 const (
-	pinnedIconSourceSize = 64
-	pinnedIconImageSize  = 56
-	pinnedIconTileSize   = 72
+	// 这里把取图尺寸保留到 128，优先保证清晰度。
+	pinnedIconSourceSize = icon.SizePlugin
+	// 显示框收紧一点，避免顶部快捷区留白太大。
+	pinnedIconImageHeight = 40
+	pinnedIconImageWeight = 48
+	pinnedIconRowHeight   = 48
 )
 
 func NewMainWindow(ctx context.Context, app fyne.App, ie *icon.Engine, opts WindowOptions) MainWindow {
@@ -112,12 +115,10 @@ func NewMainWindow(ctx context.Context, app fyne.App, ie *icon.Engine, opts Wind
 	w.pinnedIcons = container.NewHBox()
 
 	pinnedScroll := container.NewHScroll(w.pinnedIcons)
-	pinnedScroll.SetMinSize(fyne.NewSize(0, 92))
+	// 这个高度只够放一排图标，避免把上半区撑得太高。
+	pinnedScroll.SetMinSize(fyne.NewSize(0, pinnedIconRowHeight))
 
-	w.pinnedPanel = container.NewVBox(
-		//widget.NewLabel("Pinned"),
-		pinnedScroll,
-	)
+	w.pinnedPanel = container.NewVBox(pinnedScroll)
 	w.pinnedPanel.Hide()
 
 	w.list = widget.NewList(
@@ -239,9 +240,9 @@ func (w *mainWindow) refreshPinnedItems() {
 	w.pinnedItems = w.callbacks.GetPinnedItems()
 	objects := make([]fyne.CanvasObject, 0, len(w.pinnedItems))
 	for _, item := range w.pinnedItems {
-		item := item
-		button := newPinnedIconButton(w.itemIconResource(item), func() {
-			w.openItem(item)
+		i := item
+		button := newPinnedIconButton(w.itemIconResource(i), func() {
+			w.openItem(i)
 		})
 		objects = append(objects, button)
 	}
@@ -372,13 +373,6 @@ func (w *mainWindow) defaultItemIcon(item ResultItem) fyne.Resource {
 	return theme.FileIcon()
 }
 
-func (w *mainWindow) pinnedIconsNum() int {
-	if w.callbacks.PinnedIconsNum == nil {
-		return 0
-	}
-	return w.callbacks.PinnedIconsNum()
-}
-
 type pinnedIconButton struct {
 	widget.BaseWidget
 	icon     *canvas.Image
@@ -389,7 +383,8 @@ func newPinnedIconButton(resource fyne.Resource, onTapped func()) *pinnedIconBut
 	iconImage := canvas.NewImageFromResource(resource)
 	iconImage.FillMode = canvas.ImageFillContain
 	iconImage.ScaleMode = canvas.ImageScaleSmooth
-	iconImage.SetMinSize(fyne.NewSize(pinnedIconImageSize, pinnedIconImageSize))
+	// 这里只控制图标显示尺寸，不额外加底板，这样透明区域会直接透出来。
+	iconImage.SetMinSize(fyne.NewSize(pinnedIconImageWeight, pinnedIconImageHeight))
 
 	button := &pinnedIconButton{
 		icon:     iconImage,
@@ -408,12 +403,6 @@ func (b *pinnedIconButton) Tapped(*fyne.PointEvent) {
 func (b *pinnedIconButton) TappedSecondary(*fyne.PointEvent) {}
 
 func (b *pinnedIconButton) CreateRenderer() fyne.WidgetRenderer {
-	background := canvas.NewRectangle(theme.Color(theme.ColorNameOverlayBackground))
-	background.SetMinSize(fyne.NewSize(pinnedIconTileSize, pinnedIconTileSize))
-
-	content := container.NewPadded(container.NewStack(
-		background,
-		container.NewCenter(b.icon),
-	))
-	return widget.NewSimpleRenderer(content)
+	// 只保留透明容器，不再画黑底或灰底框。
+	return widget.NewSimpleRenderer(container.NewCenter(b.icon))
 }

@@ -114,7 +114,7 @@ func (f *winFetcher) extractIcon(ctx context.Context, pszPath uintptr, dwFileAtt
 	}
 
 	// 特大图标 (48x48 或 256x256) 优先采用高级路线：提取系统的 ImageList 句柄
-	if size == SizeLarge || size == SizeExtraLarge {
+	if size == SizeLarge || size == SizeExtraLarge || size == SizePlugin {
 		hIcon, typeName, err := f.getJumboIcon(pszPath, dwFileAttributes, flags, size)
 		if err == nil && hIcon != 0 {
 			defer DestroyHIcon(hIcon)

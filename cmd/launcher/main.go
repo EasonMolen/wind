@@ -1,14 +1,23 @@
 package main
 
 import (
+	_ "embed"
 	"log"
+	_ "net/http/pprof"
+	"os"
 	coreapp "wind/internal/app"
 
+	"fyne.io/fyne/v2"
 	fyneapp "fyne.io/fyne/v2/app"
 )
 
+//go:embed logo.png
+var appIconData []byte
+
 func main() {
+
 	fa := fyneapp.NewWithID("wind.newwind")
+	fa.SetIcon(fyne.NewStaticResource("appIcon", appIconData))
 
 	application, err := coreapp.NewApp(fa)
 	if err != nil {
@@ -18,4 +27,14 @@ func main() {
 	if err = application.Run(); err != nil {
 		log.Fatalf("run app: %v", err)
 	}
+}
+
+func loadResourceFromFile(path string) fyne.Resource {
+
+	bytes, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+
+	return fyne.NewStaticResource("wind", bytes)
 }

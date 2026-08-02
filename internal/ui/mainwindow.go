@@ -126,7 +126,7 @@ func NewMainWindow(ctx context.Context, app fyne.App, ie *icon.Engine, opts Wind
 			return len(w.results)
 		},
 		func() fyne.CanvasObject {
-			return newResultListItem()
+			return newResultListItem(w.window)
 		},
 		func(id widget.ListItemID, obj fyne.CanvasObject) {
 			if id < 0 || id >= len(w.results) {
@@ -134,7 +134,14 @@ func NewMainWindow(ctx context.Context, app fyne.App, ie *icon.Engine, opts Wind
 			}
 
 			item := w.results[id]
-			row := obj.(*fyne.Container)
+
+			// 1. 将 obj 断言为我们的自定义 Widget
+			menuItem := obj.(*mouseMenuItemWidget)
+			// 保存当前项的路径，供右键菜单使用
+			menuItem.itemPath = item.FullPath
+
+			//row := obj.(*fyne.Container)
+			row := menuItem.content
 			textBox := row.Objects[0].(*fyne.Container)
 			name := textBox.Objects[0].(*widget.Label)
 			path := textBox.Objects[1].(*widget.Label)
@@ -169,7 +176,7 @@ func NewMainWindow(ctx context.Context, app fyne.App, ie *icon.Engine, opts Wind
 	return w
 }
 
-func newResultListItem() fyne.CanvasObject {
+func newResultListItem(win fyne.Window) fyne.CanvasObject {
 	name := widget.NewLabel("")
 	name.TextStyle.Bold = true
 
@@ -180,7 +187,9 @@ func newResultListItem() fyne.CanvasObject {
 	pinButton.Importance = widget.LowImportance
 
 	textBox := container.NewVBox(name, path)
-	return container.NewHBox(textBox, layout.NewSpacer(), pinButton)
+	content := container.NewHBox(textBox, layout.NewSpacer(), pinButton)
+	return newMouseMenuItemWidget(content, win)
+	//return container.NewHBox(textBox, layout.NewSpacer(), pinButton)
 }
 
 func (w *mainWindow) SetCallbacks(callbacks Callbacks) {

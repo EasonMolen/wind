@@ -10,6 +10,7 @@ type mouseMenuItemWidget struct {
 	content  *fyne.Container
 	itemPath string      // 当前项的路径，用于复制
 	window   fyne.Window // 当前项的路径，用于复制
+	OnTapped func()      // 左键回调函数
 }
 
 func newMouseMenuItemWidget(content *fyne.Container, win fyne.Window) *mouseMenuItemWidget {
@@ -37,4 +38,10 @@ func (m *mouseMenuItemWidget) TappedSecondary(pe *fyne.PointEvent) {
 
 	// 在鼠标位置弹出菜单
 	widget.ShowPopUpMenuAtPosition(menu, m.window.Canvas(), pe.AbsolutePosition)
+}
+
+func (m *mouseMenuItemWidget) Tapped(pe *fyne.PointEvent) {
+	if m.OnTapped != nil {
+		m.OnTapped() //触发回调
+	}
 }

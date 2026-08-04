@@ -112,12 +112,15 @@ func NewMainWindow(ctx context.Context, app fyne.App, ie *icon.Engine, opts Wind
 	w.entry.OnSubmitted = w.submitSearch
 
 	w.iconEngine = ie
+
+	// 固定的软件的open存放在pinnedIcons中
 	w.pinnedIcons = container.NewHBox()
 
 	pinnedScroll := container.NewHScroll(w.pinnedIcons)
 	// 这个高度只够放一排图标，避免把上半区撑得太高。
 	pinnedScroll.SetMinSize(fyne.NewSize(0, pinnedIconRowHeight))
 
+	// 经过包装的pinnedIcons放到了pinnedPanel中
 	w.pinnedPanel = container.NewVBox(pinnedScroll)
 	w.pinnedPanel.Hide()
 
@@ -139,6 +142,10 @@ func NewMainWindow(ctx context.Context, app fyne.App, ie *icon.Engine, opts Wind
 			menuItem := obj.(*mouseMenuItemWidget)
 			// 保存当前项的路径，供右键菜单使用
 			menuItem.itemPath = item.FullPath
+
+			menuItem.OnTapped = func() {
+				w.list.Select(id)
+			}
 
 			//row := obj.(*fyne.Container)
 			row := menuItem.content

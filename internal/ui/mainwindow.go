@@ -20,14 +20,21 @@ import (
 )
 
 type SearchFunc func(keyword string) []ResultItem
+type CategorySearchFunc func(keyword, category string) []ResultItem
 type OpenFunc func(item ResultItem)
 type TogglePinFunc func(item ResultItem) bool
 type GetPinDisplayNameFunc func(path string) (string, bool)
 type GetPinnedItemsFunc func() []ResultItem
 type PinnedIconsNumFunc func() int
 
+type SearchCategory struct {
+	ID    string
+	Label string
+}
+
 type Callbacks struct {
 	Search            SearchFunc
+	CategorySearch    CategorySearchFunc
 	Open              OpenFunc
 	TogglePin         TogglePinFunc
 	GetPinDisplayName GetPinDisplayNameFunc
@@ -42,6 +49,7 @@ type WindowOptions struct {
 	Width      float32
 	Height     float32
 	HideOnOpen bool
+	Categories []SearchCategory
 }
 
 type MainWindow interface {
@@ -55,29 +63,36 @@ type MainWindow interface {
 }
 
 type mainWindow struct {
-	ctx         context.Context
-	window      fyne.Window
-	callbacks   Callbacks
-	entry       *widget.Entry
-	iconEngine  *icon.Engine
-	pinnedIcons *fyne.Container
-	pinnedItems []ResultItem
-	pinnedPanel *fyne.Container
-	list        *widget.List
-	status      *widget.Label
-	results     []ResultItem
-	visible     atomic.Bool
-	searchSeq   atomic.Uint64
-	hideOnOpen  bool
+	ctx                    context.Context
+	window                 fyne.Window
+	callbacks              Callbacks
+	entry                  *widget.Entry
+	iconEngine             *icon.Engine
+	pinnedIcons            *fyne.Container
+	pinnedItems            []ResultItem
+	pinnedPanel            *fyne.Container
+	categoryList           *widget.List
+	categories             []SearchCategory
+	suppressCategorySelect bool
+	list                   *widget.List
+	status                 *widget.Label
+	results                []ResultItem
+	keyword                string
+	activeCategory         string
+	visible                atomic.Bool
+	searchSeq              atomic.Uint64
+	hideOnOpen             bool
 }
 
 const (
-	// 这里把取图尺寸保留到 128，优先保证清晰度。
-	pinnedIconSourceSize = icon.SizePlugin
-	// 显示框收紧一点，避免顶部快捷区留白太大。
+	pinnedIconSourceSize  = icon.SizePlugin
 	pinnedIconImageHeight = 40
 	pinnedIconImageWeight = 48
 	pinnedIconRowHeight   = 48
+	categoryPanelRatio    = 0.22
+	defaultSearchStatus   = "Press Enter to search"
+	categoryNotConfigured = "Category search callback is not configured"
+	searchNotConfigured   = "Search callback is not configured"
 )
 
 func NewMainWindow(ctx context.Context, app fyne.App, ie *icon.Engine, opts WindowOptions) MainWindow {
@@ -103,8 +118,9 @@ func NewMainWindow(ctx context.Context, app fyne.App, ie *icon.Engine, opts Wind
 	w := &mainWindow{
 		ctx:        ctx,
 		window:     window,
-		status:     widget.NewLabel("Press Enter to search"),
+		status:     widget.NewLabel(defaultSearchStatus),
 		hideOnOpen: opts.HideOnOpen,
+		categories: normalizeCategories(opts.Categories),
 	}
 
 	w.entry = widget.NewEntry()
@@ -112,17 +128,30 @@ func NewMainWindow(ctx context.Context, app fyne.App, ie *icon.Engine, opts Wind
 	w.entry.OnSubmitted = w.submitSearch
 
 	w.iconEngine = ie
-
-	// 固定的软件的open存放在pinnedIcons中
 	w.pinnedIcons = container.NewHBox()
 
 	pinnedScroll := container.NewHScroll(w.pinnedIcons)
-	// 这个高度只够放一排图标，避免把上半区撑得太高。
 	pinnedScroll.SetMinSize(fyne.NewSize(0, pinnedIconRowHeight))
 
-	// 经过包装的pinnedIcons放到了pinnedPanel中
 	w.pinnedPanel = container.NewVBox(pinnedScroll)
 	w.pinnedPanel.Hide()
+
+	w.categoryList = widget.NewList(
+		func() int {
+			return len(w.categories)
+		},
+		func() fyne.CanvasObject {
+			return widget.NewLabel("")
+		},
+		func(id widget.ListItemID, obj fyne.CanvasObject) {
+			if id < 0 || id >= len(w.categories) {
+				return
+			}
+			obj.(*widget.Label).SetText(w.categories[id].Label)
+		},
+	)
+	w.categoryList.OnSelected = w.selectCategory
+	w.setSelectedCategory("")
 
 	w.list = widget.NewList(
 		func() int {
@@ -137,17 +166,12 @@ func NewMainWindow(ctx context.Context, app fyne.App, ie *icon.Engine, opts Wind
 			}
 
 			item := w.results[id]
-
-			// 1. 将 obj 断言为我们的自定义 Widget
 			menuItem := obj.(*mouseMenuItemWidget)
-			// 保存当前项的路径，供右键菜单使用
 			menuItem.itemPath = item.FullPath
-
 			menuItem.OnTapped = func() {
 				w.list.Select(id)
 			}
 
-			//row := obj.(*fyne.Container)
 			row := menuItem.content
 			textBox := row.Objects[0].(*fyne.Container)
 			name := textBox.Objects[0].(*widget.Label)
@@ -171,8 +195,18 @@ func NewMainWindow(ctx context.Context, app fyne.App, ie *icon.Engine, opts Wind
 	)
 	w.list.OnSelected = w.openSelected
 
+	categoryPanel := container.NewBorder(
+		widget.NewLabel("分类"),
+		nil,
+		nil,
+		nil,
+		w.categoryList,
+	)
+	resultsPanel := container.NewHSplit(categoryPanel, w.list)
+	resultsPanel.SetOffset(categoryPanelRatio)
+
 	top := container.NewVBox(w.entry, w.pinnedPanel)
-	w.window.SetContent(container.NewBorder(top, w.status, nil, nil, w.list))
+	w.window.SetContent(container.NewBorder(top, w.status, nil, nil, resultsPanel))
 	w.window.Resize(fyne.NewSize(opts.Width, opts.Height))
 	w.window.CenterOnScreen()
 	w.window.SetCloseIntercept(w.Hide)
@@ -196,7 +230,6 @@ func newResultListItem(win fyne.Window) fyne.CanvasObject {
 	textBox := container.NewVBox(name, path)
 	content := container.NewHBox(textBox, layout.NewSpacer(), pinButton)
 	return newMouseMenuItemWidget(content, win)
-	//return container.NewHBox(textBox, layout.NewSpacer(), pinButton)
 }
 
 func (w *mainWindow) SetCallbacks(callbacks Callbacks) {
@@ -275,35 +308,122 @@ func (w *mainWindow) refreshPinnedItems() {
 }
 
 func (w *mainWindow) submitSearch(keyword string) {
-	keyword = strings.TrimSpace(keyword)
-	seq := w.searchSeq.Add(1)
+	trimmed := strings.TrimSpace(keyword)
+	w.keyword = trimmed
+	w.setSelectedCategory("")
 
-	if keyword == "" {
+	if trimmed == "" {
 		w.results = nil
-		w.status.SetText("Press Enter to search")
+		w.list.UnselectAll()
 		w.list.Refresh()
+		w.status.SetText(defaultSearchStatus)
 		return
 	}
 
-	if w.callbacks.Search == nil {
-		w.status.SetText("Search callback is not configured")
+	w.executeSearch(trimmed, "")
+}
+
+func (w *mainWindow) selectCategory(id widget.ListItemID) {
+	if w.suppressCategorySelect {
+		return
+	}
+	if id < 0 || id >= len(w.categories) {
 		return
 	}
 
-	w.status.SetText(fmt.Sprintf("Searching: %s", keyword))
+	w.executeSearch(strings.TrimSpace(w.entry.Text), w.categories[id].ID)
+}
 
-	go func() {
-		results := w.callbacks.Search(keyword)
-		fyne.Do(func() {
-			if seq != w.searchSeq.Load() {
-				return
-			}
+func (w *mainWindow) executeSearch(keyword, category string) {
+	seq := w.searchSeq.Add(1)
+	w.keyword = strings.TrimSpace(keyword)
+	w.activeCategory = category
+	w.list.UnselectAll()
 
-			w.results = results
+	if category == "" {
+		if w.callbacks.Search == nil {
+			w.status.SetText(searchNotConfigured)
+			return
+		}
+
+		if w.keyword == "" {
+			w.results = nil
 			w.list.Refresh()
-			w.status.SetText(fmt.Sprintf("Found %d results", len(results)))
+			w.status.SetText(defaultSearchStatus)
+			return
+		}
+
+		w.status.SetText(fmt.Sprintf("Searching: %s", w.keyword))
+		go func() {
+			results := w.callbacks.Search(w.keyword)
+			fyne.Do(func() {
+				w.applySearchResults(seq, category, results)
+			})
+		}()
+		return
+	}
+
+	if w.callbacks.CategorySearch == nil {
+		w.status.SetText(categoryNotConfigured)
+		return
+	}
+
+	w.status.SetText(w.searchStatusText(category))
+	go func() {
+		results := w.callbacks.CategorySearch(w.keyword, category)
+		fyne.Do(func() {
+			w.applySearchResults(seq, category, results)
 		})
 	}()
+}
+
+func (w *mainWindow) applySearchResults(seq uint64, category string, results []ResultItem) {
+	if seq != w.searchSeq.Load() {
+		return
+	}
+
+	w.results = results
+	w.list.Refresh()
+	w.status.SetText(w.resultStatusText(category, len(results)))
+}
+
+func (w *mainWindow) searchStatusText(category string) string {
+	categoryLabel := w.categoryLabel(category)
+	if w.keyword == "" {
+		return fmt.Sprintf("Searching in %s", categoryLabel)
+	}
+	return fmt.Sprintf("Searching in %s: %s", categoryLabel, w.keyword)
+}
+
+func (w *mainWindow) resultStatusText(category string, count int) string {
+	if category == "" {
+		return fmt.Sprintf("Found %d results", count)
+	}
+	return fmt.Sprintf("Found %d results in %s", count, w.categoryLabel(category))
+}
+
+func (w *mainWindow) categoryLabel(category string) string {
+	for _, item := range w.categories {
+		if item.ID == category {
+			return item.Label
+		}
+	}
+	return category
+}
+
+func (w *mainWindow) setSelectedCategory(category string) {
+	w.activeCategory = category
+	index := 0
+	for i, item := range w.categories {
+		if item.ID == category {
+			index = i
+			break
+		}
+	}
+
+	w.suppressCategorySelect = true
+	w.categoryList.Select(index)
+	w.suppressCategorySelect = false
 }
 
 func (w *mainWindow) openSelected(id widget.ListItemID) {
@@ -399,7 +519,6 @@ func newPinnedIconButton(resource fyne.Resource, onTapped func()) *pinnedIconBut
 	iconImage := canvas.NewImageFromResource(resource)
 	iconImage.FillMode = canvas.ImageFillContain
 	iconImage.ScaleMode = canvas.ImageScaleSmooth
-	// 这里只控制图标显示尺寸，不额外加底板，这样透明区域会直接透出来。
 	iconImage.SetMinSize(fyne.NewSize(pinnedIconImageWeight, pinnedIconImageHeight))
 
 	button := &pinnedIconButton{
@@ -419,6 +538,32 @@ func (b *pinnedIconButton) Tapped(*fyne.PointEvent) {
 func (b *pinnedIconButton) TappedSecondary(*fyne.PointEvent) {}
 
 func (b *pinnedIconButton) CreateRenderer() fyne.WidgetRenderer {
-	// 只保留透明容器，不再画黑底或灰底框。
 	return widget.NewSimpleRenderer(container.NewCenter(b.icon))
+}
+
+func normalizeCategories(categories []SearchCategory) []SearchCategory {
+	if len(categories) == 0 {
+		return []SearchCategory{{ID: "", Label: "全部"}}
+	}
+
+	normalized := make([]SearchCategory, 0, len(categories)+1)
+	hasAll := false
+	for _, category := range categories {
+		if strings.TrimSpace(category.Label) == "" {
+			continue
+		}
+		if category.ID == "" {
+			hasAll = true
+		}
+		normalized = append(normalized, category)
+	}
+
+	if len(normalized) == 0 {
+		return []SearchCategory{{ID: "", Label: "全部"}}
+	}
+	if hasAll {
+		return normalized
+	}
+
+	return append([]SearchCategory{{ID: "", Label: "全部"}}, normalized...)
 }

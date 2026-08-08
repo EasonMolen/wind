@@ -31,6 +31,8 @@ var (
 
 type EverythingService interface {
 	Search(keyword string, maxResults int) ([]ResultSearch, error)
+
+	CategorySearch(keyword, category string, maxResults int) ([]ResultSearch, error)
 }
 
 func NewEverythingService() EverythingService {
@@ -74,7 +76,7 @@ func (e *EverythingClient) searchWithContext(ctx context.Context, keyword string
 		return nil, fmt.Errorf("search canceled while waiting for concurrency token: %w", ctx.Err())
 	}
 
-	// 【核心配置】必须使用容量为 1 的缓冲通道！
+	// 必须使用容量为 1 的缓冲通道！
 	// 防止 ctx 超时退出后，后台运行的 Goroutine 写入无缓冲 channel 导致永久挂起（协程泄露）
 	type queryResult struct {
 		data []ResultSearch
@@ -216,13 +218,13 @@ func fileTimeToTime(ft C.FILETIME) time.Time {
 	if ns100 == 0 {
 		return time.Time{}
 	}
-	// Windows Epoch (1601-01-01) 到 Unix Epoch (1970-01-01) 的 100ns 差值
+
 	const windowsToUnixEpochOffset = 116444736000000000
 	if ns100 <= windowsToUnixEpochOffset {
 		return time.Time{}
 	}
-	unixNs := (ns100 - windowsToUnixEpochOffset) * 100
-	sec := int64(unixNs / 10000000)
-	nsec := int64((unixNs % 10000000) * 100)
-	return time.Unix(sec, nsec)
+
+	// 换算为总纳秒（适用于 2262 年以前的时间）
+	unixNs := int64((ns100 - windowsToUnixEpochOffset) * 100)
+	return time.Unix(0, unixNs)
 }

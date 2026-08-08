@@ -69,9 +69,11 @@ func NewApp(fa fyne.App) (*App, error) {
 		Width:      cfg.Window.Width,
 		Height:     cfg.Window.Height,
 		HideOnOpen: cfg.Window.HideOnOpen,
+		Categories: buildSearchCategories(),
 	})
 	a.mainWindow.SetCallbacks(ui.Callbacks{
 		Search:            a.search,
+		CategorySearch:    a.categorySearch,
 		Open:              a.open,
 		TogglePin:         a.togglePin,
 		Quit:              a.Quit,
@@ -145,6 +147,31 @@ func (a *App) search(keyword string) []ui.ResultItem {
 	results, err := a.everything.Search(keyword, a.cfg.Search.MaxResults)
 	if err != nil {
 		log.Printf("search failed: %v", err)
+		return nil
+	}
+
+	items := make([]ui.ResultItem, len(results))
+	for i, result := range results {
+		items[i] = ui.ResultItem{
+			FullPath: result.FullPath,
+			FileName: result.FileName,
+			Path:     result.Path,
+			Size:     result.Size,
+			IsFolder: result.IsFolder,
+		}
+	}
+
+	return items
+}
+
+func (a *App) categorySearch(keyword, category string) []ui.ResultItem {
+	if a.everything == nil {
+		return nil
+	}
+
+	results, err := a.everything.CategorySearch(keyword, category, a.cfg.Search.MaxResults)
+	if err != nil {
+		log.Printf("categorySearch failed: %v", err)
 		return nil
 	}
 
@@ -253,4 +280,21 @@ func pinDisplayName(item ui.ResultItem) string {
 		return name
 	}
 	return item.FullPath
+}
+
+func buildSearchCategories() []ui.SearchCategory {
+	categories := make([]ui.SearchCategory, 0, len(search.CategoryDefinitions())+1)
+	categories = append(categories, ui.SearchCategory{
+		ID:    "",
+		Label: "全部",
+	})
+
+	for _, category := range search.CategoryDefinitions() {
+		categories = append(categories, ui.SearchCategory{
+			ID:    category.ID,
+			Label: category.Label,
+		})
+	}
+
+	return categories
 }

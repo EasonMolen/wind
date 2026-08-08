@@ -3,13 +3,11 @@ package ui
 import (
 	_ "embed"
 	"os"
+	"wind/assets"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/driver/desktop"
 )
-
-//go:embed logo.png
-var trayIconData []byte
 
 type TrayMenu struct {
 	desk       desktop.App
@@ -62,7 +60,7 @@ func (t *TrayMenu) StartTrayMenu() error {
 		t.desk.SetSystemTrayMenu(trayMenu)
 
 		// 设置托盘图标
-		t.desk.SetSystemTrayIcon(fyne.NewStaticResource("trayIcon", trayIconData))
+		t.desk.SetSystemTrayIcon(fyne.NewStaticResource("trayIcon", assets.IconData))
 
 		// 4. (Fyne 2.7+) 关联窗口：实现单击托盘图标自动 Toggle (显示/隐藏) 窗口
 		if t.mainWindow != nil && t.mainWindow.Window() != nil {

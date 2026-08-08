@@ -90,9 +90,10 @@ const (
 	pinnedIconImageWeight = 48
 	pinnedIconRowHeight   = 48
 	categoryPanelRatio    = 0.22
-	defaultSearchStatus   = "Press Enter to search"
-	categoryNotConfigured = "Category search callback is not configured"
-	searchNotConfigured   = "Search callback is not configured"
+	defaultSearchStatus   = "按下回车搜索"
+	categoryNotConfigured = "分类搜索回调没有配置"
+	searchNotConfigured   = "搜索回调没有配置"
+	placeholder           = "搜索文件,文件夹,应用..."
 )
 
 func NewMainWindow(ctx context.Context, app fyne.App, ie *icon.Engine, opts WindowOptions) MainWindow {
@@ -124,7 +125,7 @@ func NewMainWindow(ctx context.Context, app fyne.App, ie *icon.Engine, opts Wind
 	}
 
 	w.entry = widget.NewEntry()
-	w.entry.SetPlaceHolder("Search files, folders, or apps...")
+	w.entry.SetPlaceHolder(placeholder)
 	w.entry.OnSubmitted = w.submitSearch
 
 	w.iconEngine = ie
@@ -353,7 +354,7 @@ func (w *mainWindow) executeSearch(keyword, category string) {
 			return
 		}
 
-		w.status.SetText(fmt.Sprintf("Searching: %s", w.keyword))
+		w.status.SetText(fmt.Sprintf("正在搜索: %s", w.keyword))
 		go func() {
 			results := w.callbacks.Search(w.keyword)
 			fyne.Do(func() {
@@ -390,16 +391,16 @@ func (w *mainWindow) applySearchResults(seq uint64, category string, results []R
 func (w *mainWindow) searchStatusText(category string) string {
 	categoryLabel := w.categoryLabel(category)
 	if w.keyword == "" {
-		return fmt.Sprintf("Searching in %s", categoryLabel)
+		return fmt.Sprintf("在 %s 中搜索", categoryLabel)
 	}
-	return fmt.Sprintf("Searching in %s: %s", categoryLabel, w.keyword)
+	return fmt.Sprintf("在 %s 中搜索: %s", categoryLabel, w.keyword)
 }
 
 func (w *mainWindow) resultStatusText(category string, count int) string {
 	if category == "" {
-		return fmt.Sprintf("Found %d results", count)
+		return fmt.Sprintf("找到 %d 个结果", count)
 	}
-	return fmt.Sprintf("Found %d results in %s", count, w.categoryLabel(category))
+	return fmt.Sprintf("在 %s 中, 找到 %d 个结果", w.categoryLabel(category), count)
 }
 
 func (w *mainWindow) categoryLabel(category string) string {

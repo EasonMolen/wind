@@ -5,19 +5,17 @@ import (
 	"log"
 	_ "net/http/pprof"
 	"os"
+	"wind/assets"
 	coreapp "wind/internal/app"
 
 	"fyne.io/fyne/v2"
 	fyneapp "fyne.io/fyne/v2/app"
 )
 
-//go:embed logo.png
-var appIconData []byte
-
 func main() {
 
 	fa := fyneapp.NewWithID("wind.newwind")
-	fa.SetIcon(fyne.NewStaticResource("appIcon", appIconData))
+	fa.SetIcon(fyne.NewStaticResource("appIcon", assets.IconData))
 
 	application, err := coreapp.NewApp(fa)
 	if err != nil {

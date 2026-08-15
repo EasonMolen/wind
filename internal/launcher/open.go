@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os/exec"
+	"strings"
 	"sync"
 
 	"github.com/qiniu/open"
@@ -17,6 +19,8 @@ var (
 type OpenService interface {
 	// Open 同步打开资源，支持 Context 超时控制与并发限流
 	Open(ctx context.Context, path string) error
+	// OpenWith 使用指定的软件同步打开资源，支持 Context 超时控制
+	OpenWith(ctx context.Context, appName string, args ...string) error
 	// OpenAsync 异步打开资源，执行结果通过非阻塞 Channel 返回
 	OpenAsync(ctx context.Context, path string) <-chan error
 	// Close 优雅关闭服务，阻止新任务并等待运行中的任务完成
@@ -85,6 +89,34 @@ func (op *Opener) Open(ctx context.Context, path string) error {
 	return nil
 }
 
+func (op *Opener) OpenWith(ctx context.Context, appName string, args ...string) error {
+	op.mu.RLock()
+	if op.closed {
+		op.mu.RUnlock()
+		return ErrServiceClosed
+	}
+	op.mu.RUnlock()
+
+	op.wg.Add(1)
+	defer func() {
+		<-op.sem
+		op.wg.Done()
+	}()
+
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("%w: %v", ErrTimeout, err)
+	}
+
+	//if err := open.StartWith(path, appName); err != nil {
+	//	return fmt.Errorf("failed to open path [%s]: %w with %s", path, err, appName)
+	//}
+	if err := exec.Command(appName, args...).Start(); err != nil {
+		fmt.Errorf("failed to open path [%s]: %w with %s", args[1], err, appName)
+	}
+
+	return nil
+}
+
 // OpenAsync 异步打开资源，适用于不想阻塞主调用线程的高并发场景
 func (op *Opener) OpenAsync(ctx context.Context, path string) <-chan error {
 	// 使用缓冲为 1 的 Channel，避免调用方不读取返回值导致协程泄露 (Goroutine Leak)
@@ -111,4 +143,9 @@ func (op *Opener) Close() error {
 	// 等待所有正在执行的 open 动作完毕
 	op.wg.Wait()
 	return nil
+}
+
+func cleaninput(input string) string {
+	r := strings.NewReplacer("&", "^&")
+	return r.Replace(input)
 }

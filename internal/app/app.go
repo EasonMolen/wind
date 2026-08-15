@@ -75,6 +75,7 @@ func NewApp(fa fyne.App) (*App, error) {
 		Search:            a.search,
 		CategorySearch:    a.categorySearch,
 		Open:              a.open,
+		OpenWith:          a.openWith,
 		TogglePin:         a.togglePin,
 		Quit:              a.Quit,
 		GetPinDisplayName: a.config.GetPinDisplayName,
@@ -189,8 +190,8 @@ func (a *App) categorySearch(keyword, category string) []ui.ResultItem {
 	return items
 }
 
-func (a *App) open(item ui.ResultItem) {
-	if a.opener == nil || item.FullPath == "" {
+func (a *App) open(itemFullPath string) {
+	if a.opener == nil || itemFullPath == "" {
 		return
 	}
 
@@ -198,7 +199,22 @@ func (a *App) open(item ui.ResultItem) {
 		ctx, cancel := context.WithTimeout(a.ctx, 8*time.Second)
 		defer cancel()
 
-		if err := a.opener.Open(ctx, item.FullPath); err != nil {
+		if err := a.opener.Open(ctx, itemFullPath); err != nil {
+			log.Printf("打开失败, 错误信息: %v", err)
+		}
+	}()
+}
+
+func (a *App) openWith(appName string, args ...string) {
+	if a.opener == nil || args == nil {
+		return
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(a.ctx, 8*time.Second)
+		defer cancel()
+
+		if err := a.opener.OpenWith(ctx, appName, args...); err != nil {
 			log.Printf("打开失败, 错误信息: %v", err)
 		}
 	}()

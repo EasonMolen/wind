@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"time"
 	"wind/internal/icon"
 
 	"fyne.io/fyne/v2"
@@ -21,7 +22,8 @@ import (
 
 type SearchFunc func(keyword string) []ResultItem
 type CategorySearchFunc func(keyword, category string) []ResultItem
-type OpenFunc func(item ResultItem)
+type OpenFunc func(itemFullPath string)
+type OpenWithFunc func(appName string, args ...string)
 type TogglePinFunc func(item ResultItem) bool
 type GetPinDisplayNameFunc func(path string) (string, bool)
 type GetPinnedItemsFunc func() []ResultItem
@@ -36,6 +38,7 @@ type Callbacks struct {
 	Search            SearchFunc
 	CategorySearch    CategorySearchFunc
 	Open              OpenFunc
+	OpenWith          OpenWithFunc
 	TogglePin         TogglePinFunc
 	GetPinDisplayName GetPinDisplayNameFunc
 	GetPinnedItems    GetPinnedItemsFunc
@@ -81,10 +84,17 @@ type mainWindow struct {
 	activeCategory         string
 	visible                atomic.Bool
 	searchSeq              atomic.Uint64
+	searchDispatchTimer    *time.Timer
+	searchDispatchTicket   uint64
+	pendingSearchKeyword   string
+	pendingSearchCategory  string
+	lastSearchDispatchTime time.Time // 最后一次搜索发送的时间
 	hideOnOpen             bool
 }
 
 const (
+	searchCoalesceDelay = 50 * time.Millisecond
+
 	pinnedIconSourceSize  = icon.SizePlugin
 	pinnedIconImageHeight = 40
 	pinnedIconImageWeight = 48
@@ -126,7 +136,12 @@ func NewMainWindow(ctx context.Context, app fyne.App, ie *icon.Engine, opts Wind
 
 	w.entry = widget.NewEntry()
 	w.entry.SetPlaceHolder(placeholder)
-	w.entry.OnSubmitted = w.submitSearch
+
+	w.entry.OnChanged = func(s string) {
+		w.submitSearch(s)
+	}
+
+	//w.entry.OnSubmitted = w.submitSearch
 
 	w.iconEngine = ie
 	w.pinnedIcons = container.NewHBox()
@@ -159,7 +174,7 @@ func NewMainWindow(ctx context.Context, app fyne.App, ie *icon.Engine, opts Wind
 			return len(w.results)
 		},
 		func() fyne.CanvasObject {
-			return newResultListItem(w.window)
+			return w.newResultListItem()
 		},
 		func(id widget.ListItemID, obj fyne.CanvasObject) {
 			if id < 0 || id >= len(w.results) {
@@ -218,7 +233,7 @@ func NewMainWindow(ctx context.Context, app fyne.App, ie *icon.Engine, opts Wind
 	return w
 }
 
-func newResultListItem(win fyne.Window) fyne.CanvasObject {
+func (w *mainWindow) newResultListItem() fyne.CanvasObject {
 	name := widget.NewLabel("")
 	name.TextStyle.Bold = true
 
@@ -230,7 +245,7 @@ func newResultListItem(win fyne.Window) fyne.CanvasObject {
 
 	textBox := container.NewVBox(name, path)
 	content := container.NewHBox(textBox, layout.NewSpacer(), pinButton)
-	return newMouseMenuItemWidget(content, win)
+	return newMouseMenuItemWidget(content, w.window, w.callbacks.OpenWith)
 }
 
 func (w *mainWindow) SetCallbacks(callbacks Callbacks) {
@@ -314,14 +329,11 @@ func (w *mainWindow) submitSearch(keyword string) {
 	w.setSelectedCategory("")
 
 	if trimmed == "" {
-		w.results = nil
-		w.list.UnselectAll()
-		w.list.Refresh()
-		w.status.SetText(defaultSearchStatus)
+		w.clearSearchResults()
 		return
 	}
 
-	w.executeSearch(trimmed, "")
+	w.scheduleSearch(trimmed, "", false)
 }
 
 func (w *mainWindow) selectCategory(id widget.ListItemID) {
@@ -332,12 +344,75 @@ func (w *mainWindow) selectCategory(id widget.ListItemID) {
 		return
 	}
 
-	w.executeSearch(strings.TrimSpace(w.entry.Text), w.categories[id].ID)
+	w.scheduleSearch(strings.TrimSpace(w.entry.Text), w.categories[id].ID, true)
+}
+
+func (w *mainWindow) scheduleSearch(keyword, category string, immediate bool) {
+	keyword = strings.TrimSpace(keyword)
+	if keyword == "" {
+		w.clearSearchResults()
+		return
+	}
+
+	w.pendingSearchKeyword = keyword
+	w.pendingSearchCategory = category
+
+	// 判断是否需要“立即执行”
+	if immediate || w.lastSearchDispatchTime.IsZero() ||
+		time.Since(w.lastSearchDispatchTime) >= searchCoalesceDelay {
+		w.cancelScheduledSearch()
+		w.executeSearch(keyword, category)
+		return
+	}
+
+	// 计算需要等待的时间与升级票据
+	delay := searchCoalesceDelay - time.Since(w.lastSearchDispatchTime)
+	w.searchDispatchTicket++
+	ticket := w.searchDispatchTicket
+
+	// 重置旧的定时器
+	if w.searchDispatchTimer != nil {
+		w.searchDispatchTimer.Stop()
+	}
+
+	// 启动新的延迟任务
+	w.searchDispatchTimer = time.AfterFunc(delay, func() {
+		fyne.Do(func() {
+			// 校验票据！如果全局票据变了，说明中间又触发了新的输入，本次定时任务作废
+			if ticket != w.searchDispatchTicket {
+				return
+			}
+
+			w.searchDispatchTimer = nil
+			w.executeSearch(w.pendingSearchKeyword, w.pendingSearchCategory)
+		})
+	})
+}
+
+func (w *mainWindow) cancelScheduledSearch() {
+	w.searchDispatchTicket++
+	if w.searchDispatchTimer != nil {
+		w.searchDispatchTimer.Stop()
+		w.searchDispatchTimer = nil
+	}
+	w.pendingSearchKeyword = ""
+	w.pendingSearchCategory = ""
+}
+
+func (w *mainWindow) clearSearchResults() {
+	w.cancelScheduledSearch()
+	w.searchSeq.Add(1)
+	w.results = nil
+	w.list.UnselectAll()
+	w.list.Refresh()
+	w.status.SetText(defaultSearchStatus)
 }
 
 func (w *mainWindow) executeSearch(keyword, category string) {
+	keyword = strings.TrimSpace(keyword)
 	seq := w.searchSeq.Add(1)
-	w.keyword = strings.TrimSpace(keyword)
+	w.lastSearchDispatchTime = time.Now()
+	w.keyword = keyword
 	w.activeCategory = category
 	w.list.UnselectAll()
 
@@ -355,8 +430,9 @@ func (w *mainWindow) executeSearch(keyword, category string) {
 		}
 
 		w.status.SetText(fmt.Sprintf("正在搜索: %s", w.keyword))
+		searchKeyword := w.keyword
 		go func() {
-			results := w.callbacks.Search(w.keyword)
+			results := w.callbacks.Search(searchKeyword)
 			fyne.Do(func() {
 				w.applySearchResults(seq, category, results)
 			})
@@ -370,8 +446,9 @@ func (w *mainWindow) executeSearch(keyword, category string) {
 	}
 
 	w.status.SetText(w.searchStatusText(category))
+	searchKeyword := w.keyword
 	go func() {
-		results := w.callbacks.CategorySearch(w.keyword, category)
+		results := w.callbacks.CategorySearch(searchKeyword, category)
 		fyne.Do(func() {
 			w.applySearchResults(seq, category, results)
 		})
@@ -439,7 +516,16 @@ func (w *mainWindow) openSelected(id widget.ListItemID) {
 
 func (w *mainWindow) openItem(item ResultItem) {
 	if w.callbacks.Open != nil {
-		w.callbacks.Open(item)
+		w.callbacks.Open(item.FullPath)
+	}
+	if w.hideOnOpen {
+		w.Hide()
+	}
+}
+
+func (w *mainWindow) openWithItem(item ResultItem, appName string) {
+	if w.callbacks.OpenWith != nil {
+		w.callbacks.OpenWith(item.FullPath, appName)
 	}
 	if w.hideOnOpen {
 		w.Hide()

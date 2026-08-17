@@ -83,7 +83,7 @@ func NewApp(fa fyne.App) (*App, error) {
 		PinnedIconsNum:    a.config.PinnedNum,
 	})
 
-	tray := ui.NewTrayMenu(fa, a.mainWindow, a.Quit)
+	tray := ui.NewTrayMenu(fa, a.mainWindow, a.Quit, a.Cleanup)
 	if err := tray.StartTrayMenu(); err != nil {
 		return nil, err
 	}
@@ -107,16 +107,16 @@ func (a *App) Run() error {
 	}
 
 	a.fyneApp.Run()
-	a.Shutdown()
+	a.Cleanup()
 	return nil
 }
 
 func (a *App) Quit() {
-	a.Shutdown()
+	a.Cleanup()
 	a.fyneApp.Quit()
 }
 
-func (a *App) Shutdown() {
+func (a *App) Cleanup() {
 	if a.cancel != nil {
 		a.cancel()
 	}

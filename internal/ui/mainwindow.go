@@ -90,6 +90,7 @@ type mainWindow struct {
 	pendingSearchCategory  string
 	lastSearchDispatchTime time.Time // 最后一次搜索发送的时间
 	hideOnOpen             bool
+	suppressOpenOnSelect   bool
 }
 
 const (
@@ -184,6 +185,28 @@ func NewMainWindow(ctx context.Context, app fyne.App, ie *icon.Engine, opts Wind
 			item := w.results[id]
 			menuItem := obj.(*mouseMenuItemWidget)
 			menuItem.itemPath = item.FullPath
+			menuItem.OnRename = func(oldPath, newPath string) {
+				targetIndex := -1
+
+				// 找到和重命名的选项的id
+				for i := range w.results {
+					if w.results[i].FullPath == oldPath {
+						targetIndex = i
+						w.results[i].FullPath = newPath
+						w.results[i].FileName = filepath.Base(newPath)
+						break
+					}
+				}
+
+				// 反馈与选中
+				if targetIndex != -1 {
+					w.suppressOpenOnSelect = true
+					w.list.Select(targetIndex)
+					w.status.SetText("已重命名为: " + filepath.Base(newPath))
+				} else {
+					w.status.SetText("重命名成功，但列表中未找到原项")
+				}
+			}
 			menuItem.OnTapped = func() {
 				w.list.Select(id)
 			}
@@ -228,6 +251,12 @@ func NewMainWindow(ctx context.Context, app fyne.App, ie *icon.Engine, opts Wind
 	w.window.SetCloseIntercept(w.Hide)
 	w.window.SetOnClosed(func() {
 		w.visible.Store(false)
+	})
+
+	app.Lifecycle().SetOnExitedForeground(func() {
+		if w.IsVisible() {
+			w.Hide()
+		}
 	})
 
 	return w
@@ -505,6 +534,12 @@ func (w *mainWindow) setSelectedCategory(category string) {
 }
 
 func (w *mainWindow) openSelected(id widget.ListItemID) {
+	// 如果标志位为 true，立刻返回，不执行任何打开文件操作
+	if w.suppressOpenOnSelect {
+		w.suppressOpenOnSelect = false
+		return
+	}
+
 	if id < 0 || id >= len(w.results) {
 		return
 	}

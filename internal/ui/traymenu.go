@@ -2,7 +2,6 @@ package ui
 
 import (
 	_ "embed"
-	"os"
 	"wind/assets"
 
 	"fyne.io/fyne/v2"
@@ -10,14 +9,18 @@ import (
 )
 
 type TrayMenu struct {
+	app        fyne.App
 	desk       desktop.App
 	mainWindow MainWindow
+	cleanup    func()
 	quit       func()
 }
 
-func NewTrayMenu(app fyne.App, win MainWindow, quit func()) *TrayMenu {
+func NewTrayMenu(app fyne.App, win MainWindow, quit func(), cleanup func()) *TrayMenu {
 	t := &TrayMenu{
+		app:        app,
 		mainWindow: win,
+		cleanup:    cleanup,
 		quit:       quit,
 	}
 
@@ -45,7 +48,7 @@ func (t *TrayMenu) StartTrayMenu() error {
 			t.mainWindow.Hide()
 		})
 
-		// 补充：增加彻底退出程序的菜单项
+		// 增加彻底退出程序的菜单项
 		quitItem := fyne.NewMenuItem("优雅退出", func() {
 			t.quit()
 		})
@@ -66,17 +69,11 @@ func (t *TrayMenu) StartTrayMenu() error {
 		if t.mainWindow != nil && t.mainWindow.Window() != nil {
 			t.desk.SetSystemTrayWindow(t.mainWindow.Window())
 		}
+
+		t.app.Lifecycle().SetOnStopped(func() {
+			t.cleanup()
+		})
 	})
 
 	return nil
-}
-
-func loadResourceFromFile(path string) fyne.Resource {
-
-	bytes, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-
-	return fyne.NewStaticResource("wind", bytes)
 }

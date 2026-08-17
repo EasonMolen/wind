@@ -4,19 +4,22 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"syscall"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/widget"
 )
 
 type mouseMenuItemWidget struct {
 	widget.BaseWidget
 	content  *fyne.Container
-	itemPath string       // 当前项的路径，用于复制
-	window   fyne.Window  // 当前项的路径，用于复制
-	openWith OpenWithFunc // 用于实现“资源管理器打开”
-	OnTapped func()       // 左键回调函数
+	itemPath string                        // 当前项的路径，用于复制
+	window   fyne.Window                   // 当前项的路径，用于复制
+	openWith OpenWithFunc                  // 用于实现“资源管理器打开”
+	OnTapped func()                        // 左键回调函数
+	OnRename func(oldPath, newPath string) // 重命名后的回调函数
 }
 
 func newMouseMenuItemWidget(content *fyne.Container, win fyne.Window, openFunc OpenWithFunc) *mouseMenuItemWidget {
@@ -49,9 +52,16 @@ func (m *mouseMenuItemWidget) TappedSecondary(pe *fyne.PointEvent) {
 				}
 			}(m.itemPath)
 		}),
+		fyne.NewMenuItem("复制文件名", func() {
+			fileName := filepath.Base(m.itemPath)
+			m.window.Clipboard().SetContent(fileName)
+		}),
 		fyne.NewMenuItem("复制文件路径", func() {
 			// 点击复制时，将路径写入剪贴板
 			m.window.Clipboard().SetContent(m.itemPath)
+		}),
+		fyne.NewMenuItem("重命名", func() {
+			m.rename()
 		}),
 	)
 
@@ -88,5 +98,55 @@ func (m *mouseMenuItemWidget) copyFileToClipboard(path string) error {
 
 	// 执行命令并等待完成
 	return cmd.Run()
+}
 
+func (m *mouseMenuItemWidget) rename() {
+	oldPath := m.itemPath
+
+	dir, oldName := filepath.Split(oldPath)
+
+	entry := widget.NewEntry()
+	entry.SetText(oldName)
+
+	items := []*widget.FormItem{
+		widget.NewFormItem("新名称:", entry),
+	}
+
+	d := dialog.NewForm("重命名", "确认", "取消", items, func(confirm bool) {
+
+		if !confirm {
+			return
+		}
+
+		newName := entry.Text
+
+		if newName == "" || oldName == newName {
+			// 提示
+			dialog.ShowError(fmt.Errorf("新名称不能为空"), m.window)
+			return
+		}
+
+		newPath := filepath.Join(dir, newName)
+
+		if err := os.Rename(oldPath, newPath); err != nil {
+			// 提示
+			dialog.ShowError(fmt.Errorf("重命名失败:\n%v", err), m.window)
+			return
+		}
+
+		m.itemPath = newPath
+
+		if m.OnRename != nil {
+			m.OnRename(oldPath, newPath)
+		}
+
+		dialog.ShowInformation("成功", "文件已重命名", m.window)
+
+	}, m.window)
+
+	d.Resize(fyne.NewSize(400, 150))
+
+	d.Show()
+
+	m.window.Canvas().Focus(entry)
 }

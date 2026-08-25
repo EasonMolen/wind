@@ -42,13 +42,13 @@ func CategoryDefinitions() []CategoryDefinition {
 	return copied
 }
 
-func (e *EverythingClient) CategorySearch(keyword, category string, maxResults int) ([]ResultSearch, error) {
+func (e *EverythingClient) CategorySearch(keyword, category string) ([]ResultSearch, error) {
 	ctx, cancelFunc := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelFunc()
-	return e.categorySearchWithContext(ctx, keyword, category, maxResults)
+	return e.categorySearchWithContext(ctx, keyword, category)
 }
 
-func (e *EverythingClient) categorySearchWithContext(ctx context.Context, keyword string, category string, maxResults int) ([]ResultSearch, error) {
+func (e *EverythingClient) categorySearchWithContext(ctx context.Context, keyword string, category string) ([]ResultSearch, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -87,8 +87,8 @@ func (e *EverythingClient) categorySearchWithContext(ctx context.Context, keywor
 		C.Everything_SetMatchPath(C.BOOL(0))
 		C.Everything_SetRegex(C.BOOL(0))
 
-		if maxResults > 0 {
-			C.Everything_SetMax(C.DWORD(maxResults))
+		if e.maxResults > 0 {
+			C.Everything_SetMax(C.DWORD(e.maxResults))
 		} else {
 			C.Everything_SetMax(C.DWORD(200))
 		}
@@ -160,7 +160,7 @@ func (e *EverythingClient) categorySearchWithContext(ctx context.Context, keywor
 	case <-ctx.Done():
 		return nil, fmt.Errorf("everything search timeout or canceled: %w", ctx.Err())
 	case res := <-resultCh:
-		return res.data, res.err
+		return e.Filter(res.data, keyword), res.err
 	}
 }
 

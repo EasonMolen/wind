@@ -22,6 +22,7 @@ import (
 type EverythingClient struct {
 	mu  sync.Mutex
 	sem chan struct{} // 信号量：限制并发执行 CGO 调用的最大线程数，防止 Everything 卡死导致 OS 线程耗尽
+	*FilterEngine
 }
 
 var (
@@ -30,17 +31,18 @@ var (
 )
 
 type EverythingService interface {
-	Search(keyword string, maxResults int) ([]ResultSearch, error)
+	Search(keyword string) ([]ResultSearch, error)
 
-	CategorySearch(keyword, category string, maxResults int) ([]ResultSearch, error)
+	CategorySearch(keyword, category string) ([]ResultSearch, error)
 }
 
-func NewEverythingService() EverythingService {
+func NewEverythingService(maxResults int) EverythingService {
 	once.Do(func() {
 		instance = &EverythingClient{
 			sem: make(chan struct{}, 10),
 		}
 	})
+	instance.FilterEngine = NewFilterEngine(maxResults)
 	return instance
 }
 
@@ -55,14 +57,14 @@ type ResultSearch struct {
 	IsFolder     bool      // 是否是文件夹
 }
 
-func (e *EverythingClient) Search(keyword string, maxResults int) ([]ResultSearch, error) {
+func (e *EverythingClient) Search(keyword string) ([]ResultSearch, error) {
 	ctx, cancelFunc := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelFunc()
-	return e.searchWithContext(ctx, keyword, maxResults)
+	return e.searchWithContext(ctx, keyword)
 }
 
 // searchWithContext 具备 Context 超时控制与线程泄露保护的查询接口
-func (e *EverythingClient) searchWithContext(ctx context.Context, keyword string, maxResults int) ([]ResultSearch, error) {
+func (e *EverythingClient) searchWithContext(ctx context.Context, keyword string) ([]ResultSearch, error) {
 	// 检查 Context 是否已逾期或取消
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -100,8 +102,8 @@ func (e *EverythingClient) searchWithContext(ctx context.Context, keyword string
 		C.Everything_SetRegex(C.BOOL(0))
 
 		// 设置结果数量限制
-		if maxResults > 0 {
-			C.Everything_SetMax(C.DWORD(maxResults))
+		if e.maxResults > 0 {
+			C.Everything_SetMax(C.DWORD(e.maxResults))
 		} else {
 			C.Everything_SetMax(C.DWORD(200)) // 默认限制200条防止暴涨
 		}
@@ -186,7 +188,7 @@ func (e *EverythingClient) searchWithContext(ctx context.Context, keyword string
 	case <-ctx.Done():
 		return nil, fmt.Errorf("everything search timeout or canceled: %w", ctx.Err())
 	case res := <-resultCh:
-		return res.data, res.err
+		return e.Filter(res.data, keyword), res.err
 	}
 }
 

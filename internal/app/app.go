@@ -47,7 +47,7 @@ func NewApp(fa fyne.App) (*App, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	a := &App{
 		fyneApp:    fa,
-		everything: search.NewEverythingService(),
+		everything: search.NewEverythingService(cfg.Search.MaxResults),
 		hotkey:     hotkey.NewKeyServer(),
 		opener:     launcher.NewOpener(launcher.WithMaxConcurrency(cfg.Launcher.MaxConcurrency)),
 		config:     cfgService,
@@ -145,7 +145,7 @@ func (a *App) search(keyword string) []ui.ResultItem {
 		return nil
 	}
 
-	results, err := a.everything.Search(keyword, a.cfg.Search.MaxResults)
+	results, err := a.everything.Search(keyword)
 	if err != nil {
 		log.Printf("search failed: %v", err)
 		return nil
@@ -170,7 +170,7 @@ func (a *App) categorySearch(keyword, category string) []ui.ResultItem {
 		return nil
 	}
 
-	results, err := a.everything.CategorySearch(keyword, category, a.cfg.Search.MaxResults)
+	results, err := a.everything.CategorySearch(keyword, category)
 	if err != nil {
 		log.Printf("categorySearch failed: %v", err)
 		return nil

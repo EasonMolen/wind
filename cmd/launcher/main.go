@@ -5,12 +5,21 @@ import (
 	"log"
 	_ "net/http/pprof"
 	"os"
+	"syscall"
 	"wind/assets"
 	coreapp "wind/internal/app"
 
 	"fyne.io/fyne/v2"
 	fyneapp "fyne.io/fyne/v2/app"
 )
+
+func init() {
+	// 启用 Per-Monitor V2 DPI Awareness
+	user32 := syscall.NewLazyDLL("user32.dll")
+	procSetProcessDpiAwarenessContext := user32.NewProc("SetProcessDpiAwarenessContext")
+	// DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
+	procSetProcessDpiAwarenessContext.Call(^uintptr(3))
+}
 
 func main() {
 

@@ -91,6 +91,8 @@ type mainWindow struct {
 	lastSearchDispatchTime time.Time // 最后一次搜索发送的时间
 	hideOnOpen             bool
 	suppressOpenOnSelect   bool
+	Width                  float32
+	Height                 float32
 }
 
 const (
@@ -133,6 +135,8 @@ func NewMainWindow(ctx context.Context, app fyne.App, ie *icon.Engine, opts Wind
 		status:     widget.NewLabel(defaultSearchStatus),
 		hideOnOpen: opts.HideOnOpen,
 		categories: normalizeCategories(opts.Categories),
+		Width:      opts.Width,
+		Height:     opts.Height,
 	}
 
 	w.entry = widget.NewEntry()
@@ -247,7 +251,7 @@ func NewMainWindow(ctx context.Context, app fyne.App, ie *icon.Engine, opts Wind
 	top := container.NewVBox(w.entry, w.pinnedPanel)
 	w.window.SetContent(container.NewBorder(top, w.status, nil, nil, resultsPanel))
 	w.window.Resize(fyne.NewSize(opts.Width, opts.Height))
-	w.window.CenterOnScreen()
+	//w.window.CenterOnScreen()
 	w.window.SetCloseIntercept(w.Hide)
 	w.window.SetOnClosed(func() {
 		w.visible.Store(false)
@@ -282,12 +286,12 @@ func (w *mainWindow) SetCallbacks(callbacks Callbacks) {
 	w.refreshPinnedItems()
 }
 
-func (w *mainWindow) Show() {
-	w.visible.Store(true)
-	w.window.Show()
-	w.window.RequestFocus()
-	w.FocusSearch()
-}
+//func (w *mainWindow) Show() {
+//	w.visible.Store(true)
+//	w.window.Show()
+//	w.window.RequestFocus()
+//	w.FocusSearch()
+//}
 
 func (w *mainWindow) Hide() {
 	w.visible.Store(false)

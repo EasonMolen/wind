@@ -5,6 +5,7 @@ import (
 	"runtime"
 	"syscall"
 	"unsafe"
+	"wind/internal/window"
 
 	"fyne.io/fyne/v2"
 	"github.com/jasonlovesdoggo/displayindex"
@@ -47,7 +48,15 @@ func (w *mainWindow) Show() {
 	w.window.Show()
 
 	if runtime.GOOS == "windows" {
-		w.alignToActiveScreenCenter() // 直接调用，不再嵌套 fyne.Do
+		//w.alignToActiveScreenCenter() // 直接调用，不再嵌套 fyne.Do
+		currentDisplayIndex, err := displayindex.CurrentDisplayIndex()
+		if err != nil {
+			return
+		}
+		err = window.MoveWindowToAnchor(w.window, currentDisplayIndex, window.AnchorBottomThirdCenter)
+		if err != nil {
+			return
+		}
 	} else {
 		w.window.CenterOnScreen()
 	}

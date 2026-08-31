@@ -141,6 +141,7 @@ func NewMainWindow(ctx context.Context, app fyne.App, ie *icon.Engine, opts Wind
 
 	w.entry = widget.NewEntry()
 	w.entry.SetPlaceHolder(placeholder)
+	w.entry.Resize(fyne.NewSize(760, 48))
 
 	w.entry.OnChanged = func(s string) {
 		w.submitSearch(s)
@@ -149,14 +150,119 @@ func NewMainWindow(ctx context.Context, app fyne.App, ie *icon.Engine, opts Wind
 	//w.entry.OnSubmitted = w.submitSearch
 
 	w.iconEngine = ie
+
+	// 固定的图标
 	w.pinnedIcons = container.NewHBox()
 
 	pinnedScroll := container.NewHScroll(w.pinnedIcons)
 	pinnedScroll.SetMinSize(fyne.NewSize(0, pinnedIconRowHeight))
 
-	w.pinnedPanel = container.NewVBox(pinnedScroll)
+	var leftBtn, rightBtn *widget.Button
+
+	updateArrowButtons := func() {
+		// 内容比设定的宽度小,不显示箭头
+		if pinnedScroll.Content.Size().Width <= pinnedScroll.Size().Width {
+			leftBtn.Disable()
+			rightBtn.Disable()
+			return
+		}
+
+		// 根据滚动位置禁用对应按钮
+		if pinnedScroll.Offset.X <= 0 {
+			leftBtn.Disable()
+			rightBtn.Enable()
+		} else {
+			leftBtn.Enable()
+			rightBtn.Enable()
+		}
+
+		maxOffset := pinnedScroll.Content.Size().Width - pinnedScroll.Size().Width
+		if pinnedScroll.Offset.X >= maxOffset {
+			rightBtn.Disable()
+			leftBtn.Enable()
+		} else {
+			rightBtn.Enable()
+		}
+	}
+
+	// 创建左箭头按钮
+	leftBtn = widget.NewButtonWithIcon("", theme.NavigateBackIcon(), func() {
+		scrollStep := pinnedScroll.Size().Width
+		newOffset := pinnedScroll.Offset.X - scrollStep
+		if newOffset < 0 {
+			newOffset = 0
+		}
+		pinnedScroll.Offset.X = newOffset
+		pinnedScroll.Refresh()
+		updateArrowButtons()
+	})
+
+	// 创建右箭头按钮
+	rightBtn = widget.NewButtonWithIcon("", theme.NavigateNextIcon(), func() {
+		scrollStep := pinnedScroll.Size().Width
+		maxOffset := pinnedScroll.Content.Size().Width - pinnedScroll.Size().Width
+		newOffset := pinnedScroll.Offset.X + scrollStep
+		if newOffset > maxOffset {
+			newOffset = maxOffset
+		}
+		pinnedScroll.Offset.X = newOffset
+		pinnedScroll.Refresh()
+		updateArrowButtons()
+	})
+
+	// 初始禁用按钮（updateArrowButtons 会决定最终状态）
+	leftBtn.Disable()
+	rightBtn.Disable()
+
+	// 监听滚动事件（鼠标拖拽、滚轮等）更新按钮状态
+	pinnedScroll.OnScrolled = func(position fyne.Position) {
+		updateArrowButtons()
+	}
+
+	// 构建最终面板：左右箭头 + 滚动区域
+	w.pinnedPanel = container.NewBorder(
+		nil,
+		nil,
+		leftBtn,
+		rightBtn,
+		pinnedScroll,
+	)
+
+	// 初始更新按钮状态
+	updateArrowButtons()
 	w.pinnedPanel.Hide()
 
+	//gradient := canvas.NewHorizontalGradient(color.Transparent, theme.Color(theme.ColorNameBackground))
+	//gradient.SetMinSize(fyne.NewSize(96, pinnedIconRowHeight))
+	//
+	//fadeContainer := container.NewHBox(layout.NewSpacer(), gradient)
+	//stack := container.NewStack(fadeContainer, pinnedScroll)
+	//
+	//w.pinnedPanel = container.NewVBox(stack)
+	//
+	//updateFade := func() {
+	//	if pinnedScroll.Content.MinSize().Width > pinnedScroll.Size().Width {
+	//		// 内容溢出，显示渐变
+	//		fadeContainer.Show()
+	//	} else {
+	//		fadeContainer.Hide()
+	//	}
+	//}
+	//
+	//updateFade()
+	//w.pinnedPanel.Refresh()
+	////w.pinnedPanel = container.NewVBox(pinnedScroll)
+	//w.pinnedPanel.Hide()
+
+	//pinnedScroll.OnScrolled = func(p fyne.Position) {
+	//	if p.X >= pinnedScroll.Content.Size().Width-pinnedScroll.Size().Width {
+	//		fadeContainer.Hide() // 已滚到最右端，隐藏阴影
+	//	} else {
+	//		fadeContainer.Show()
+	//	}
+	//}
+
+	// 展示分类列表
 	w.categoryList = widget.NewList(
 		func() int {
 			return len(w.categories)
@@ -174,6 +280,7 @@ func NewMainWindow(ctx context.Context, app fyne.App, ie *icon.Engine, opts Wind
 	w.categoryList.OnSelected = w.selectCategory
 	w.setSelectedCategory("")
 
+	// 添充列表中的内容
 	w.list = widget.NewList(
 		func() int {
 			return len(w.results)
@@ -238,6 +345,7 @@ func NewMainWindow(ctx context.Context, app fyne.App, ie *icon.Engine, opts Wind
 	)
 	w.list.OnSelected = w.openSelected
 
+	// 组织固定图标下方"分类提示"下方布局
 	categoryPanel := container.NewBorder(
 		widget.NewLabel("分类"),
 		nil,
@@ -245,6 +353,8 @@ func NewMainWindow(ctx context.Context, app fyne.App, ie *icon.Engine, opts Wind
 		nil,
 		w.categoryList,
 	)
+
+	// 组织固定图标下方"搜索结果"布局
 	resultsPanel := container.NewHSplit(categoryPanel, w.list)
 	resultsPanel.SetOffset(categoryPanelRatio)
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"image/color"
 	"image/png"
 	"path/filepath"
 	"strings"
@@ -23,7 +24,7 @@ import (
 type SearchFunc func(keyword string) []ResultItem
 type CategorySearchFunc func(keyword, category string) []ResultItem
 type OpenFunc func(itemFullPath string)
-type OpenWithFunc func(appName string, args ...string)
+type OpenWithFunc func(useAppName string, args ...string)
 type TogglePinFunc func(item ResultItem) bool
 type GetPinDisplayNameFunc func(path string) (string, bool)
 type GetPinnedItemsFunc func() []ResultItem
@@ -100,8 +101,8 @@ const (
 
 	pinnedIconSourceSize  = icon.SizePlugin
 	pinnedIconImageHeight = 40
-	pinnedIconImageWeight = 48
-	pinnedIconRowHeight   = 48
+	pinnedIconImageWidth  = 48
+	pinnedIconRowHeight   = 80
 	categoryPanelRatio    = 0.22
 	defaultSearchStatus   = "按下回车搜索"
 	categoryNotConfigured = "分类搜索回调没有配置"
@@ -295,7 +296,7 @@ func NewMainWindow(ctx context.Context, app fyne.App, ie *icon.Engine, opts Wind
 
 			item := w.results[id]
 			menuItem := obj.(*mouseMenuItemWidget)
-			menuItem.itemPath = item.FullPath
+			menuItem.item = &item
 			menuItem.OnRename = func(oldPath, newPath string) {
 				targetIndex := -1
 
@@ -449,9 +450,39 @@ func (w *mainWindow) refreshPinnedItems() {
 	objects := make([]fyne.CanvasObject, 0, len(w.pinnedItems))
 	for _, item := range w.pinnedItems {
 		i := item
-		button := newPinnedIconButton(w.itemIconResource(i), func() {
-			w.openItem(i)
-		})
+		button := newPinnedIconButton(
+			i.FileName,
+			w.itemIconResource(i),
+			&i,
+			i.FullPath,
+			w.window,
+			func(useAppName string, args ...string) {
+				if w.callbacks.OpenWith != nil {
+					w.callbacks.OpenWith("explorer", "/select,", i.FullPath)
+				}
+				if w.hideOnOpen {
+					w.Hide()
+				}
+			},
+			func(it ResultItem) bool {
+				if w.callbacks.TogglePin == nil {
+					return false
+				}
+				pinned := w.callbacks.TogglePin(it)
+
+				w.refreshPinnedItems()
+				w.list.Refresh()
+				return pinned
+			},
+			func(oldPath, newPath string) {
+				// 固定项重命名成功后的处理
+				w.refreshPinnedItems()
+				w.list.Refresh()
+			},
+			func() {
+				w.openItem(i)
+			},
+		)
 		objects = append(objects, button)
 	}
 
@@ -747,22 +778,55 @@ func (w *mainWindow) defaultItemIcon(item ResultItem) fyne.Resource {
 
 type pinnedIconButton struct {
 	widget.BaseWidget
-	icon     *canvas.Image
-	onTapped func()
+	icon      *canvas.Image
+	name      string
+	nameLabel *widget.Label
+
+	item      *ResultItem
+	itemPath  string                        // 当前项路径
+	window    fyne.Window                   // 用于弹窗和剪贴板
+	openWith  OpenWithFunc                  // 资源管理器打开
+	onRename  func(oldPath, newPath string) // 重命名成功回调
+	onTapped  func()                        // 左键点击回调
+	togglePin TogglePinFunc                 // 切换固定图标
+	bg        *canvas.Rectangle
 }
 
-func newPinnedIconButton(resource fyne.Resource, onTapped func()) *pinnedIconButton {
+func newPinnedIconButton(
+	pinnedItemName string,
+	resource fyne.Resource,
+	item *ResultItem,
+	itemPath string,
+	win fyne.Window,
+	openWith OpenWithFunc,
+	togglePin TogglePinFunc,
+	onRename func(oldPath, newPath string),
+	onTapped func(),
+) *pinnedIconButton {
 	iconImage := canvas.NewImageFromResource(resource)
 	iconImage.FillMode = canvas.ImageFillContain
 	iconImage.ScaleMode = canvas.ImageScaleSmooth
-	iconImage.SetMinSize(fyne.NewSize(pinnedIconImageWeight, pinnedIconImageHeight))
+	iconImage.SetMinSize(fyne.NewSize(pinnedIconImageWidth, pinnedIconImageHeight))
 
-	button := &pinnedIconButton{
-		icon:     iconImage,
-		onTapped: onTapped,
+	nameLabel := widget.NewLabel(strings.TrimSuffix(pinnedItemName, filepath.Ext(pinnedItemName)))
+	nameLabel.Alignment = fyne.TextAlignCenter
+	nameLabel.Wrapping = fyne.TextWrapOff
+	nameLabel.Truncation = fyne.TextTruncateClip
+
+	b := &pinnedIconButton{
+		icon:      iconImage,
+		name:      pinnedItemName,
+		nameLabel: nameLabel,
+		item:      item,
+		itemPath:  itemPath,
+		window:    win,
+		openWith:  openWith,
+		onRename:  onRename,
+		onTapped:  onTapped,
+		togglePin: togglePin,
 	}
-	button.ExtendBaseWidget(button)
-	return button
+	b.ExtendBaseWidget(b)
+	return b
 }
 
 func (b *pinnedIconButton) Tapped(*fyne.PointEvent) {
@@ -774,8 +838,122 @@ func (b *pinnedIconButton) Tapped(*fyne.PointEvent) {
 func (b *pinnedIconButton) TappedSecondary(*fyne.PointEvent) {}
 
 func (b *pinnedIconButton) CreateRenderer() fyne.WidgetRenderer {
-	return widget.NewSimpleRenderer(container.NewCenter(b.icon))
+	b.bg = canvas.NewRectangle(theme.Color(theme.ColorNameBackground))
+
+	content := container.NewVBox(
+		container.NewCenter(b.icon),
+		b.nameLabel,
+	)
+
+	catcher := newHoverCatcher(
+		// MouseIn
+		func() {
+			b.bg.FillColor = theme.Color(theme.ColorNameHover)
+			b.bg.Refresh()
+		},
+		// MouseOut
+		func() {
+			b.bg.FillColor = theme.Color(theme.ColorNameBackground)
+			b.bg.Refresh()
+		},
+		// Tapped（左键）
+		func() {
+			if b.onTapped != nil {
+				b.onTapped()
+			}
+		},
+		// TappedSecondary（右键）
+		func(pe *fyne.PointEvent) {
+			ShowItemContextMenu(
+				b.window,
+				b.itemPath,
+				b.openWith,
+				func(oldPath, newPath string) {
+					b.itemPath = newPath
+					b.name = filepath.Base(newPath)
+					b.nameLabel.SetText(b.name)
+					if b.onRename != nil {
+						b.onRename(oldPath, newPath)
+					}
+				},
+				b.togglePin,
+				pe.AbsolutePosition,
+				b.item,
+			)
+		},
+	)
+
+	return widget.NewSimpleRenderer(container.NewStack(b.bg, content, catcher))
 }
+
+//func (b *pinnedIconButton) MinSize() fyne.Size {
+//	b.ExtendBaseWidget(b)
+//	iconSize := fyne.NewSize(pinnedIconImageWeight, pinnedIconImageHeight)
+//	nameSize := b.nameLabel.MinSize()
+//	return fyne.NewSize(
+//		fyne.Max(iconSize.Width, nameSize.Width),
+//		iconSize.Height+nameSize.Height)
+//}
+
+func (b *pinnedIconButton) MinSize() fyne.Size {
+	b.ExtendBaseWidget(b)
+	return fyne.NewSize(pinnedIconImageWidth, pinnedIconRowHeight)
+}
+
+// 透明 hover 捕获层：实现 desktop.Hoverable 和 fyne.Tappable
+type hoverCatcher struct {
+	widget.BaseWidget
+	onIn        func()
+	onOut       func()
+	onTapped    func()
+	onSecondary func(*fyne.PointEvent)
+}
+
+func newHoverCatcher(onIn, onOut func(), onTapped func(), onSecondary func(event *fyne.PointEvent)) *hoverCatcher {
+	h := &hoverCatcher{onIn: onIn, onOut: onOut, onTapped: onTapped, onSecondary: onSecondary}
+	h.ExtendBaseWidget(h)
+	return h
+}
+
+func (h *hoverCatcher) CreateRenderer() fyne.WidgetRenderer {
+	// 用一个几乎全透明的矩形，只为占位和接收事件
+	r := canvas.NewRectangle(color.Transparent)
+	return widget.NewSimpleRenderer(r)
+}
+
+func (h *hoverCatcher) MouseIn(*desktop.MouseEvent) {
+	if h.onIn != nil {
+		h.onIn()
+	}
+}
+func (h *hoverCatcher) MouseOut() {
+	if h.onOut != nil {
+		h.onOut()
+	}
+}
+
+func (h *hoverCatcher) MouseMoved(*desktop.MouseEvent) {
+	if h.onIn != nil {
+		h.onIn()
+	}
+}
+
+func (h *hoverCatcher) Tapped(*fyne.PointEvent) {
+	if h.onTapped != nil {
+		h.onTapped()
+	}
+}
+
+func (h *hoverCatcher) TappedSecondary(pe *fyne.PointEvent) {
+	if h.onSecondary != nil {
+		h.onSecondary(pe)
+	}
+
+}
+
+var _ desktop.Hoverable = (*hoverCatcher)(nil)
+var _ fyne.Tappable = (*hoverCatcher)(nil)
+var _ fyne.SecondaryTappable = (*hoverCatcher)(nil)
 
 func normalizeCategories(categories []SearchCategory) []SearchCategory {
 	if len(categories) == 0 {

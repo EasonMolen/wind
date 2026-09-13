@@ -20,7 +20,7 @@ type OpenService interface {
 	// Open 同步打开资源，支持 Context 超时控制与并发限流
 	Open(ctx context.Context, path string) error
 	// OpenWith 使用指定的软件同步打开资源，支持 Context 超时控制
-	OpenWith(ctx context.Context, appName string, args ...string) error
+	OpenWith(ctx context.Context, useAppName string, args ...string) error
 	// OpenAsync 异步打开资源，执行结果通过非阻塞 Channel 返回
 	OpenAsync(ctx context.Context, path string) <-chan error
 	// Close 优雅关闭服务，阻止新任务并等待运行中的任务完成

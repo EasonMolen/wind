@@ -205,7 +205,7 @@ func (a *App) open(itemFullPath string) {
 	}()
 }
 
-func (a *App) openWith(appName string, args ...string) {
+func (a *App) openWith(useAppName string, args ...string) {
 	if a.opener == nil || args == nil {
 		return
 	}
@@ -214,7 +214,7 @@ func (a *App) openWith(appName string, args ...string) {
 		ctx, cancel := context.WithTimeout(a.ctx, 8*time.Second)
 		defer cancel()
 
-		if err := a.opener.OpenWith(ctx, appName, args...); err != nil {
+		if err := a.opener.OpenWith(ctx, useAppName, args...); err != nil {
 			log.Printf("打开失败, 错误信息: %v", err)
 		}
 	}()

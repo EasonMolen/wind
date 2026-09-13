@@ -14,12 +14,14 @@ import (
 
 type mouseMenuItemWidget struct {
 	widget.BaseWidget
-	content  *fyne.Container
-	itemPath string                        // 当前项的路径，用于复制
-	window   fyne.Window                   // 当前项的路径，用于复制
-	openWith OpenWithFunc                  // 用于实现“资源管理器打开”
-	OnTapped func()                        // 左键回调函数
-	OnRename func(oldPath, newPath string) // 重命名后的回调函数
+	content *fyne.Container
+	item    *ResultItem // 完整的item内容
+	//itemPath  string                        // 当前项的路径，用于复制
+	window    fyne.Window                   // 当前项的路径，用于复制
+	openWith  OpenWithFunc                  // 用于实现“资源管理器打开”
+	OnTapped  func()                        // 左键回调函数
+	OnRename  func(oldPath, newPath string) // 重命名后的回调函数
+	TogglePin TogglePinFunc                 // 切换固定图标
 }
 
 func newMouseMenuItemWidget(content *fyne.Container, win fyne.Window, openFunc OpenWithFunc) *mouseMenuItemWidget {
@@ -37,36 +39,21 @@ func (m *mouseMenuItemWidget) CreateRenderer() fyne.WidgetRenderer {
 	return widget.NewSimpleRenderer(m.content)
 }
 
-// TappedSecondary 捕获右键点击事件
 func (m *mouseMenuItemWidget) TappedSecondary(pe *fyne.PointEvent) {
-	// 创建右键菜单
-	menu := fyne.NewMenu("",
-		fyne.NewMenuItem("使用资源管理器打开", func() {
-			m.openWith("explorer", "/select,", m.itemPath)
-		}),
-		fyne.NewMenuItem("复制文件", func() {
-			go func(itemPath string) {
-				if err := m.copyFileToClipboard(itemPath); err != nil {
-					fmt.Printf("复制文件失败：%v", err.Error())
-					return
-				}
-			}(m.itemPath)
-		}),
-		fyne.NewMenuItem("复制文件名", func() {
-			fileName := filepath.Base(m.itemPath)
-			m.window.Clipboard().SetContent(fileName)
-		}),
-		fyne.NewMenuItem("复制文件路径", func() {
-			// 点击复制时，将路径写入剪贴板
-			m.window.Clipboard().SetContent(m.itemPath)
-		}),
-		fyne.NewMenuItem("重命名", func() {
-			m.rename()
-		}),
+	ShowItemContextMenu(
+		m.window,
+		m.item.FullPath,
+		m.openWith,
+		func(oldPath, newPath string) {
+			m.item.FullPath = newPath
+			if m.OnRename != nil {
+				m.OnRename(oldPath, newPath)
+			}
+		},
+		m.TogglePin,
+		pe.AbsolutePosition,
+		m.item,
 	)
-
-	// 在鼠标位置弹出菜单
-	widget.ShowPopUpMenuAtPosition(menu, m.window.Canvas(), pe.AbsolutePosition)
 }
 
 func (m *mouseMenuItemWidget) Tapped(pe *fyne.PointEvent) {
@@ -75,8 +62,48 @@ func (m *mouseMenuItemWidget) Tapped(pe *fyne.PointEvent) {
 	}
 }
 
-func (m *mouseMenuItemWidget) copyFileToClipboard(path string) error {
-	// 使用 powershell 的 Set-Clipboard 命令
+// ShowItemContextMenu 在指定位置弹出针对某个文件路径的右键菜单
+func ShowItemContextMenu(
+	window fyne.Window,
+	itemPath string,
+	openWith OpenWithFunc,
+	onRename func(oldPath, newPath string),
+	TogglePin TogglePinFunc,
+	pos fyne.Position,
+	item *ResultItem,
+) {
+	menu := fyne.NewMenu("",
+		fyne.NewMenuItem("使用资源管理器打开", func() {
+			openWith("explorer", "/select,", itemPath)
+		}),
+		fyne.NewMenuItem("复制文件", func() {
+			go func(p string) {
+				if err := CopyFileToClipboard(p); err != nil {
+					fmt.Printf("复制文件失败：%v", err.Error())
+				}
+			}(itemPath)
+		}),
+		fyne.NewMenuItem("复制文件名", func() {
+			window.Clipboard().SetContent(filepath.Base(itemPath))
+		}),
+		fyne.NewMenuItem("复制文件路径", func() {
+			window.Clipboard().SetContent(itemPath)
+		}),
+		fyne.NewMenuItem("重命名", func() {
+			ShowRenameDialog(window, itemPath, onRename)
+		}),
+		fyne.NewMenuItem("取消固定", func() {
+			if item != nil {
+				TogglePin(*item)
+			}
+		}),
+	)
+
+	widget.ShowPopUpMenuAtPosition(menu, window.Canvas(), pos)
+}
+
+// CopyFileToClipboard 使用 powershell 把文件复制到剪贴板
+func CopyFileToClipboard(path string) error {
 	// -NoProfile: 加快启动速度
 	// -WindowStyle Hidden: 隐藏黑框闪烁
 	// -Command: 执行的具体脚本
@@ -100,9 +127,8 @@ func (m *mouseMenuItemWidget) copyFileToClipboard(path string) error {
 	return cmd.Run()
 }
 
-func (m *mouseMenuItemWidget) rename() {
-	oldPath := m.itemPath
-
+// ShowRenameDialog 弹出重命名对话框
+func ShowRenameDialog(window fyne.Window, oldPath string, onRename func(oldPath, newPath string)) {
 	dir, oldName := filepath.Split(oldPath)
 
 	entry := widget.NewEntry()
@@ -113,7 +139,6 @@ func (m *mouseMenuItemWidget) rename() {
 	}
 
 	d := dialog.NewForm("重命名", "确认", "取消", items, func(confirm bool) {
-
 		if !confirm {
 			return
 		}
@@ -121,32 +146,27 @@ func (m *mouseMenuItemWidget) rename() {
 		newName := entry.Text
 
 		if newName == "" || oldName == newName {
-			// 提示
-			dialog.ShowError(fmt.Errorf("新名称不能为空"), m.window)
+			dialog.ShowError(fmt.Errorf("新名称不能为空"), window)
 			return
 		}
 
 		newPath := filepath.Join(dir, newName)
 
 		if err := os.Rename(oldPath, newPath); err != nil {
-			// 提示
-			dialog.ShowError(fmt.Errorf("重命名失败:\n%v", err), m.window)
+			dialog.ShowError(fmt.Errorf("重命名失败:\n%v", err), window)
 			return
 		}
 
-		m.itemPath = newPath
-
-		if m.OnRename != nil {
-			m.OnRename(oldPath, newPath)
+		if onRename != nil {
+			onRename(oldPath, newPath)
 		}
 
-		dialog.ShowInformation("成功", "文件已重命名", m.window)
+		dialog.ShowInformation("成功", "文件已重命名", window)
 
-	}, m.window)
+	}, window)
 
 	d.Resize(fyne.NewSize(400, 150))
-
 	d.Show()
 
-	m.window.Canvas().Focus(entry)
+	window.Canvas().Focus(entry)
 }

@@ -4,7 +4,6 @@ import (
 	_ "embed"
 	"log"
 	_ "net/http/pprof"
-	"os"
 	"syscall"
 	"wind/assets"
 	coreapp "wind/internal/app"
@@ -34,14 +33,4 @@ func main() {
 	if err = application.Run(); err != nil {
 		log.Fatalf("run app: %v", err)
 	}
-}
-
-func loadResourceFromFile(path string) fyne.Resource {
-
-	bytes, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-
-	return fyne.NewStaticResource("wind", bytes)
 }

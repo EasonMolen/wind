@@ -65,11 +65,12 @@ func NewApp(fa fyne.App) (*App, error) {
 
 	mainWindowCtx := context.WithoutCancel(a.ctx)
 	a.mainWindow = ui.NewMainWindow(mainWindowCtx, fa, iconEngine, ui.WindowOptions{
-		Title:      cfg.Window.Title,
-		Width:      cfg.Window.Width,
-		Height:     cfg.Window.Height,
-		HideOnOpen: cfg.Window.HideOnOpen,
-		Categories: buildSearchCategories(),
+		Title:         cfg.Window.Title,
+		Width:         cfg.Window.Width,
+		Height:        cfg.Window.Height,
+		HideOnOpen:    cfg.Window.HideOnOpen,
+		Categories:    buildSearchCategories(),
+		ShowCharacter: cfg.Display.ShowCharacter,
 	})
 	a.mainWindow.SetCallbacks(ui.Callbacks{
 		Search:            a.search,

@@ -20,6 +20,7 @@ type Config struct {
 	Search   SearchConfig   `json:"search"`
 	Launcher LauncherConfig `json:"launcher"`
 	Icon     IconConfig     `json:"icon"`
+	Display  DisplayConfig  `json:"display"`
 	Pins     []Pins         `json:"pins"`
 }
 
@@ -47,6 +48,10 @@ type IconConfig struct {
 	CacheCapacity    int  `json:"cacheCapacity"`
 	DefaultTimeoutMS int  `json:"defaultTimeoutMs"`
 	EnableExtRouting bool `json:"enableExtRouting"`
+}
+
+type DisplayConfig struct {
+	ShowCharacter bool `json:"showCharacter"`
 }
 
 type Pins struct {
@@ -106,6 +111,9 @@ func DefaultConfig() Config {
 			CacheCapacity:    1024,
 			DefaultTimeoutMS: 3000,
 			EnableExtRouting: true,
+		},
+		Display: DisplayConfig{
+			ShowCharacter: false,
 		},
 		Pins: []Pins{},
 	}

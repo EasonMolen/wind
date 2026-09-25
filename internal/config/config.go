@@ -3,7 +3,10 @@ package config
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -12,6 +15,7 @@ import (
 const (
 	appDirName     = "newwind"
 	configFileName = "config.json"
+	linkName       = "NewWind.lnk"
 )
 
 type Config struct {
@@ -42,7 +46,8 @@ type SearchConfig struct {
 }
 
 type LauncherConfig struct {
-	MaxConcurrency int `json:"maxConcurrency"`
+	MaxConcurrency           int  `json:"maxConcurrency"`
+	StartAutomaticallyOnBoot bool `json:"startAutomaticallyOnBoot"`
 }
 
 type IconConfig struct {
@@ -77,6 +82,9 @@ type CfgService interface {
 	MovePin(path string, targetIndex int) error
 	PinnedNum() int
 	UpdatePinnedName(oldPath, newPath string) error
+	IsStartOnBoot() bool
+	SetStartOnBoot() error
+	UnsetStartOnBoot() error
 }
 
 type cfgService struct {
@@ -114,7 +122,8 @@ func DefaultConfig() Config {
 			MaxResults: 50,
 		},
 		Launcher: LauncherConfig{
-			MaxConcurrency: 10,
+			MaxConcurrency:           10,
+			StartAutomaticallyOnBoot: false,
 		},
 		Icon: IconConfig{
 			CacheCapacity:    1024,
@@ -308,6 +317,79 @@ func (s *cfgService) PinnedNum() int {
 	defer s.mu.Unlock()
 
 	return len(s.pinMap)
+}
+
+func (s *cfgService) SetStartOnBoot() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	linkPath, err := startupLinkPath()
+	if err != nil {
+		return err
+	}
+
+	if err = os.MkdirAll(filepath.Dir(linkPath), 0o755); err != nil {
+		return err
+	}
+
+	exePath, err := os.Executable()
+	if err != nil {
+		return err
+	}
+
+	go func(link, target string) {
+		if e := createShortcut(link, target); e != nil {
+			log.Printf("create shortcut failed: %v", e)
+			// 或者 s.onError(e)
+		}
+	}(linkPath, exePath)
+
+	return nil
+
+}
+
+func (s *cfgService) UnsetStartOnBoot() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	linkPath, err := startupLinkPath()
+	if err != nil {
+		return err
+	}
+	if err = os.Remove(linkPath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+func (s *cfgService) IsStartOnBoot() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	linkPath, err := startupLinkPath()
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(linkPath)
+	return err == nil
+}
+
+func startupLinkPath() (string, error) {
+	cfgDir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+
+	startupDir := filepath.Join(cfgDir, "Microsoft", "Windows", "Start Menu", "Programs", "Startup")
+	return filepath.Join(startupDir, linkName), nil
+}
+
+func createShortcut(linkPath, target string) error {
+	script := fmt.Sprintf(
+		`$ws = New-Object -ComObject WScript.Shell; $sc = $ws.CreateShortcut('%s'); $sc.TargetPath = '%s'; $sc.Save()`,
+		linkPath, target,
+	)
+	cmd := exec.Command("powershell", "-NoProfile", "-Command", script)
+	return cmd.Run()
 }
 
 func defaultConfigPath() string {

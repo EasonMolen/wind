@@ -16,6 +16,7 @@ import (
 type Settings struct {
 	ToggleHotkey  string
 	ShowOnStart   bool
+	StartOnBoot   bool
 	HideOnOpen    bool
 	ShowCharacter bool
 	MaxResults    int
@@ -42,6 +43,8 @@ func (w *mainWindow) showSettings() {
 	maxResults.SetText(strconv.Itoa(settings.MaxResults))
 	showOnStart := widget.NewCheck("启动时显示窗口", nil)
 	showOnStart.SetChecked(settings.ShowOnStart)
+	startAutomaticallyOnBoot := widget.NewCheck("开机自启动", nil)
+	startAutomaticallyOnBoot.SetChecked(settings.StartOnBoot)
 	hideOnOpen := widget.NewCheck("打开结果后隐藏窗口", nil)
 	hideOnOpen.SetChecked(settings.HideOnOpen)
 	showCharacter := widget.NewCheck("固定项显示名称", nil)
@@ -76,6 +79,7 @@ func (w *mainWindow) showSettings() {
 		widget.NewFormItem("唤起热键", hotkey),
 		widget.NewFormItem("最大搜索结果", maxResults),
 		widget.NewFormItem("", showOnStart),
+		widget.NewFormItem("", startAutomaticallyOnBoot),
 		widget.NewFormItem("", hideOnOpen),
 		widget.NewFormItem("", showCharacter),
 		widget.NewFormItem("当前版本", version),
@@ -93,11 +97,12 @@ func (w *mainWindow) showSettings() {
 		updated := Settings{
 			ToggleHotkey:  strings.TrimSpace(hotkey.Text),
 			ShowOnStart:   showOnStart.Checked,
+			StartOnBoot:   startAutomaticallyOnBoot.Checked,
 			HideOnOpen:    hideOnOpen.Checked,
 			ShowCharacter: showCharacter.Checked,
 			MaxResults:    limit,
 		}
-		if err := w.callbacks.SaveSettings(updated); err != nil {
+		if err = w.callbacks.SaveSettings(updated); err != nil {
 			dialog.ShowError(err, w.window)
 			return
 		}

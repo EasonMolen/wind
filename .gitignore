@@ -1,33 +1,53 @@
-*
-!*/
-!*.go
-!*.mod
-!*.sum
-!*.md
-!*.txt
-!*.yaml
-!*.yml
-!*.json
-!*.toml
-!*.html
-!*.css
-!*.js
-!*.proto
-!*.sh
-!*.ps1
-!*.png
-!Makefile
-!LICENSE
-!*.gitignore
-!.github/
-!cmd/
-!internal/
-!pkg/
-!api/
-!test/
-!scripts/
-!docs/
-!configs/
-!runtime/
-!third_party/
-.idea
+# 二进制/编译产物
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+bin/
+dist/
+build/
+
+# Go 工作区文件
+go.work
+go.work.sum
+
+# 测试与覆盖率
+coverage.txt
+coverage.out
+*.cover
+
+# 依赖目录（Go Modules 一般不需要 vendor，如需提交则删掉这行）
+vendor/
+
+# IDE / 编辑器
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# 操作系统
+.DS_Store
+Thumbs.db
+
+# 环境变量/密钥
+.env
+.env.local
+*.pem
+*.key
+
+# 日志与临时文件
+*.log
+tmp/
+temp/
+runtime/
+
+
+*.syso
+*.ico
+*.zip
+*.lnk
+hide_task_windows

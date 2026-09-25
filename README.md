@@ -14,7 +14,7 @@ SDK 的 IPC 客户端；实际搜索还需要一个正在后台运行的 Everyth
 ## 便携版发布
 
 1. 从 voidtools 下载官方 x64 portable Everything 包，审阅其再分发许可。
-2. 将 `Everything.exe` 放入 `runtime/Everything.exe`，并将官方许可证文本放入
+2. 将 `Everything.exe`（以及可选的 `Everything.lng`）放入 `runtime/`，并将官方许可证文本放入
    `third_party/licenses/`。
 3. 执行：
 

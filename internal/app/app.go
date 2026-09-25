@@ -344,6 +344,7 @@ func (a *App) settings() ui.Settings {
 	return ui.Settings{
 		ToggleHotkey:  cfg.Hotkey.Toggle,
 		ShowOnStart:   cfg.Window.ShowOnStart,
+		StartOnBoot:   cfg.Launcher.StartAutomaticallyOnBoot,
 		HideOnOpen:    cfg.Window.HideOnOpen,
 		ShowCharacter: cfg.Display.ShowCharacter,
 		MaxResults:    cfg.Search.MaxResults,
@@ -376,6 +377,7 @@ func (a *App) saveSettings(settings ui.Settings) error {
 	updated := previous
 	updated.Hotkey.Toggle = settings.ToggleHotkey
 	updated.Window.ShowOnStart = settings.ShowOnStart
+	updated.Launcher.StartAutomaticallyOnBoot = settings.StartOnBoot
 	updated.Window.HideOnOpen = settings.HideOnOpen
 	updated.Display.ShowCharacter = settings.ShowCharacter
 	updated.Search.MaxResults = settings.MaxResults
@@ -385,10 +387,21 @@ func (a *App) saveSettings(settings ui.Settings) error {
 			return err
 		}
 	}
+	if updated.Launcher.StartAutomaticallyOnBoot != previous.Launcher.StartAutomaticallyOnBoot {
+		if err := a.setStartOnBoot(updated.Launcher.StartAutomaticallyOnBoot); err != nil {
+			if updated.Hotkey.Toggle != previous.Hotkey.Toggle {
+				_ = a.replaceToggleHotkey(updated.Hotkey.Toggle, previous.Hotkey.Toggle)
+			}
+			return err
+		}
+	}
 
 	a.config.Set(updated)
 	if err := a.config.SaveConfig(); err != nil {
 		a.config.Set(previous)
+		if updated.Launcher.StartAutomaticallyOnBoot != previous.Launcher.StartAutomaticallyOnBoot {
+			_ = a.setStartOnBoot(previous.Launcher.StartAutomaticallyOnBoot)
+		}
 		if updated.Hotkey.Toggle != previous.Hotkey.Toggle {
 			_ = a.replaceToggleHotkey(updated.Hotkey.Toggle, previous.Hotkey.Toggle)
 		}
@@ -399,6 +412,22 @@ func (a *App) saveSettings(settings ui.Settings) error {
 		a.everything.SetMaxResults(settings.MaxResults)
 	}
 	a.mainWindow.ApplySettings(settings)
+	return nil
+}
+
+func (a *App) setStartOnBoot(enabled bool) error {
+	if a.config == nil {
+		return errors.New("配置服务不可用")
+	}
+	if enabled {
+		if err := a.config.SetStartOnBoot(); err != nil {
+			return fmt.Errorf("创建开机自启动快捷方式: %w", err)
+		}
+		return nil
+	}
+	if err := a.config.UnsetStartOnBoot(); err != nil {
+		return fmt.Errorf("移除开机自启动快捷方式: %w", err)
+	}
 	return nil
 }
 

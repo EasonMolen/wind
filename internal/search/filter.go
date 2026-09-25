@@ -7,19 +7,39 @@ import (
 	"time"
 )
 
-// 预定义系统与垃圾路径模式（统一小写）
+// 预定义系统路径（统一小写）。
+//
+// 注意：这里故意不排除 Program Files、Program Files (x86) 和 AppData。
+// 它们既会产生大量噪声，也是 QQ、微信、用户自定义安装目录等应用的常见位置。
+// 噪声资源在 calcula teScore 中降权，而不是在这里一刀切地丢弃。
 var defaultSystemPatterns = []string{
 	`c:\windows\`,
-	`c:\program files\`,
-	`c:\program files (x86)\`,
 	`c:\programdata\`,
 	`c:\$recycle.bin\`,
 	`c:\system volume information\`,
-	`\appdata\`,
+	`c:\recovery\`,
+	`c:\$winreagent\`,
+}
+
+// 这些是路径中的完整目录段，不会误伤名字里恰好包含这些字母的文件。
+var defaultJunkPathSegments = []string{
 	`\temp\`,
 	`\cache\`,
 	`\node_modules\`,
 	`\.git\`,
+}
+
+// 驱动与硬件组件的安装目录通常没有直接启动价值；保留普通的软件安装目录。
+var defaultDriverPathSegments = []string{
+	`\nvidia corporation\`,
+	`\nvidia\installer`,
+	`\amd\installer`,
+	`\intel\driver`,
+}
+
+var defaultDriverRoots = []string{
+	`c:\nvidia\`,
+	`c:\amd\`,
 }
 
 // 关联扩展名表
@@ -53,9 +73,18 @@ func (fe *FilterEngine) Filter(results []ResultSearch, keyword string) []ResultS
 
 	// 1. 原地过滤 (In-place Filtering)，避免切片扩容开销
 	n := 0
+	seenPaths := make(map[string]int, len(results))
 	for _, r := range results {
 		// 排除系统或隐藏路径（直接使用 FullPath 校验）
 		if fe.isSystemPath(r.FullPath) {
+			continue
+		}
+		pathKey := normalizeSearchPath(r.FullPath)
+		if index, exists := seenPaths[pathKey]; exists {
+			// 同一文件既被 Everything 找到又位于 PATH 时，保留 PATH 的排序优势。
+			if r.IsPathEntry {
+				results[index].IsPathEntry = true
+			}
 			continue
 		}
 
@@ -68,6 +97,7 @@ func (fe *FilterEngine) Filter(results []ResultSearch, keyword string) []ResultS
 		}
 
 		results[n] = r
+		seenPaths[pathKey] = n
 		n++
 	}
 	filtered := results[:n]
@@ -96,8 +126,23 @@ func (fe *FilterEngine) Filter(results []ResultSearch, keyword string) []ResultS
 }
 
 func (fe *FilterEngine) isSystemPath(fullPath string) bool {
-	lowerPath := strings.ToLower(fullPath)
+	lowerPath := normalizeSearchPath(fullPath)
 	for _, pattern := range fe.systemPatterns {
+		if strings.HasPrefix(lowerPath, pattern) {
+			return true
+		}
+	}
+	for _, root := range defaultDriverRoots {
+		if strings.HasPrefix(lowerPath, root) {
+			return true
+		}
+	}
+	for _, pattern := range defaultJunkPathSegments {
+		if strings.Contains(lowerPath, pattern) {
+			return true
+		}
+	}
+	for _, pattern := range defaultDriverPathSegments {
 		if strings.Contains(lowerPath, pattern) {
 			return true
 		}
@@ -105,11 +150,20 @@ func (fe *FilterEngine) isSystemPath(fullPath string) bool {
 	return false
 }
 
+func normalizeSearchPath(path string) string {
+	path = strings.ToLower(strings.TrimSpace(path))
+	path = strings.ReplaceAll(path, "/", `\`)
+	if !strings.HasSuffix(path, `\`) {
+		path += `\`
+	}
+	return path
+}
+
 // calculateScore 计算结果的关联度分数
 func calculateScore(r ResultSearch, keyword string, now time.Time) int {
 	score := 0
 
-	// 修正 Bug：分别获取文件名与关键字的小写
+	// 分别获取文件名与关键字的小写
 	lowerFileName := strings.ToLower(r.FileName)
 	lowerKeyword := strings.ToLower(keyword)
 	lowerPath := strings.ToLower(r.FullPath)
@@ -143,6 +197,12 @@ func calculateScore(r ResultSearch, keyword string, now time.Time) int {
 	if isVendorResourcePath(lowerPath) {
 		score -= 80 // 扣除大分，让第三方软件资源排到最后
 	}
+	if isApplicationInstallPath(lowerPath) && isLaunchable(r) {
+		score += 45 // 软件安装位置中的启动入口应优先于同名资源
+	}
+	if r.IsPathEntry {
+		score += 120 // PATH 中可直接执行的命令，是启动器最有价值的结果之一
+	}
 
 	// (2) 用户数据盘/常用目录提权
 	if isUserPrimaryPath(r.Path) {
@@ -172,15 +232,12 @@ func calculateScore(r ResultSearch, keyword string, now time.Time) int {
 // 辅助函数：判断是否为软件/第三方库的内置资源路径
 func isVendorResourcePath(lowerPath string) bool {
 	vendorPatterns := []string{
-		`\program files`,
-		`\appdata\`,
 		`\resources\`,
 		`\assets\`,
 		`\node_modules\`,
 		`\vendor\`,
 		`\site-packages\`,
 		`\target\`,
-		`\bin\`,
 		`\obj\`,
 	}
 	for _, p := range vendorPatterns {
@@ -189,6 +246,35 @@ func isVendorResourcePath(lowerPath string) bool {
 		}
 	}
 	return false
+}
+
+func isApplicationInstallPath(lowerPath string) bool {
+	installRoots := []string{
+		`c:\program files\`,
+		`c:\program files (x86)\`,
+		`c:\programs file\`,
+		`c:\programs files\`,
+		`\appdata\local\programs\`,
+		`\appdata\roaming\`,
+	}
+	for _, root := range installRoots {
+		if strings.Contains(lowerPath, root) {
+			return true
+		}
+	}
+	return false
+}
+
+func isLaunchable(r ResultSearch) bool {
+	if r.IsFolder {
+		return true
+	}
+	switch strings.ToLower(getExtension(r.FileName)) {
+	case ".exe", ".com", ".bat", ".cmd", ".lnk", ".url":
+		return true
+	default:
+		return false
+	}
 }
 
 // 辅助函数：判断是否为用户主导的常用路径

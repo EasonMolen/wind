@@ -3,8 +3,8 @@ package ui
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"image/png"
+	"math"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -12,6 +12,7 @@ import (
 	"wind/internal/icon"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/layout"
@@ -19,14 +20,20 @@ import (
 	"fyne.io/fyne/v2/widget"
 )
 
-type SearchFunc func(keyword string) []ResultItem
-type CategorySearchFunc func(keyword, category string) []ResultItem
+type SearchFunc func(keyword string) ([]ResultItem, error)
+type CategorySearchFunc func(keyword, category string) ([]ResultItem, error)
 type OpenFunc func(itemFullPath string)
 type OpenWithFunc func(useAppName string, args ...string)
 type TogglePinFunc func(item ResultItem) bool
 type GetPinDisplayNameFunc func(path string) (string, bool)
 type GetPinnedItemsFunc func() []ResultItem
+type MovePinnedItemFunc func(path string, targetIndex int) bool
 type PinnedIconsNumFunc func() int
+
+type UpdateConfigFunc func(oldPath, newPath string) error
+type GetSettingsFunc func() Settings
+type SaveSettingsFunc func(Settings) error
+type CheckUpdatesFunc func(context.Context) (UpdateStatus, error)
 
 type SearchCategory struct {
 	ID    string
@@ -41,7 +48,12 @@ type Callbacks struct {
 	TogglePin         TogglePinFunc
 	GetPinDisplayName GetPinDisplayNameFunc
 	GetPinnedItems    GetPinnedItemsFunc
+	MovePinnedItem    MovePinnedItemFunc
 	PinnedIconsNum    PinnedIconsNumFunc
+	UpdateConfig      UpdateConfigFunc
+	GetSettings       GetSettingsFunc
+	SaveSettings      SaveSettingsFunc
+	CheckUpdates      CheckUpdatesFunc
 	Hide              func()
 	Quit              func()
 }
@@ -62,6 +74,7 @@ type MainWindow interface {
 	Toggle()
 	IsVisible() bool
 	FocusSearch()
+	ApplySettings(Settings)
 	Window() fyne.Window
 }
 
@@ -72,6 +85,8 @@ type mainWindow struct {
 	entry                  *widget.Entry
 	iconEngine             *icon.Engine
 	pinnedIcons            *fyne.Container
+	pinnedScroll           *container.Scroll
+	pinnedDropIndicator    *canvas.Rectangle
 	pinnedItems            []ResultItem
 	pinnedPanel            *fyne.Container
 	categoryList           *widget.List
@@ -103,6 +118,7 @@ const (
 	pinnedIconImageHeight = 40
 	pinnedButtonHeight    = 52
 	pinnedIconImageWidth  = 48
+	pinnedIconLabelWidth  = 80
 	categoryPanelRatio    = 0.22
 	defaultSearchStatus   = "按下回车搜索"
 	categoryNotConfigured = "分类搜索回调没有配置"
@@ -155,8 +171,12 @@ func NewMainWindow(ctx context.Context, app fyne.App, ie *icon.Engine, opts Wind
 
 	// 固定的图标
 	w.pinnedIcons = container.NewHBox()
+	w.pinnedDropIndicator = canvas.NewRectangle(theme.Color(theme.ColorNamePrimary))
+	w.pinnedDropIndicator.Hide()
 
 	pinnedScroll := container.NewHScroll(w.pinnedIcons)
+	w.pinnedScroll = pinnedScroll
+	pinnedContent := container.NewStack(pinnedScroll, w.pinnedDropIndicator)
 	//pinnedScroll.SetMinSize(fyne.NewSize(0, pinnedIconImageHeight))
 
 	var leftBtn, rightBtn *widget.Button
@@ -227,42 +247,12 @@ func NewMainWindow(ctx context.Context, app fyne.App, ie *icon.Engine, opts Wind
 		nil,
 		leftBtn,
 		rightBtn,
-		pinnedScroll,
+		pinnedContent,
 	)
 
 	// 初始更新按钮状态
 	updateArrowButtons()
 	w.pinnedPanel.Hide()
-
-	//gradient := canvas.NewHorizontalGradient(color.Transparent, theme.Color(theme.ColorNameBackground))
-	//gradient.SetMinSize(fyne.NewSize(96, pinnedIconRowHeight))
-	//
-	//fadeContainer := container.NewHBox(layout.NewSpacer(), gradient)
-	//stack := container.NewStack(fadeContainer, pinnedScroll)
-	//
-	//w.pinnedPanel = container.NewVBox(stack)
-	//
-	//updateFade := func() {
-	//	if pinnedScroll.Content.MinSize().Width > pinnedScroll.Size().Width {
-	//		// 内容溢出，显示渐变
-	//		fadeContainer.Show()
-	//	} else {
-	//		fadeContainer.Hide()
-	//	}
-	//}
-	//
-	//updateFade()
-	//w.pinnedPanel.Refresh()
-	////w.pinnedPanel = container.NewVBox(pinnedScroll)
-	//w.pinnedPanel.Hide()
-
-	//pinnedScroll.OnScrolled = func(p fyne.Position) {
-	//	if p.X >= pinnedScroll.Content.Size().Width-pinnedScroll.Size().Width {
-	//		fadeContainer.Hide() // 已滚到最右端，隐藏阴影
-	//	} else {
-	//		fadeContainer.Show()
-	//	}
-	//}
 
 	// 展示分类列表
 	w.categoryList = widget.NewList(
@@ -360,7 +350,10 @@ func NewMainWindow(ctx context.Context, app fyne.App, ie *icon.Engine, opts Wind
 	resultsPanel := container.NewHSplit(categoryPanel, w.list)
 	resultsPanel.SetOffset(categoryPanelRatio)
 
-	top := container.NewVBox(w.entry, w.pinnedPanel)
+	settingsButton := widget.NewButtonWithIcon("", theme.SettingsIcon(), w.showSettings)
+	settingsButton.Importance = widget.LowImportance
+	searchBar := container.NewBorder(nil, nil, nil, settingsButton, w.entry)
+	top := container.NewVBox(searchBar, w.pinnedPanel)
 	w.window.SetContent(container.NewBorder(top, w.status, nil, nil, resultsPanel))
 	w.window.Resize(fyne.NewSize(opts.Width, opts.Height))
 	//w.window.CenterOnScreen()
@@ -433,6 +426,12 @@ func (w *mainWindow) Window() fyne.Window {
 	return w.window
 }
 
+func (w *mainWindow) ApplySettings(settings Settings) {
+	w.hideOnOpen = settings.HideOnOpen
+	w.showCharacter = settings.ShowCharacter
+	w.refreshPinnedItems()
+}
+
 func (w *mainWindow) refreshPinnedItems() {
 	if w.pinnedIcons == nil || w.pinnedPanel == nil {
 		return
@@ -481,6 +480,8 @@ func (w *mainWindow) refreshPinnedItems() {
 				return pinned
 			},
 			func(oldPath, newPath string) {
+				// 更新配置文件中的路径信息
+				_ = w.callbacks.UpdateConfig(oldPath, newPath)
 				// 固定项重命名成功后的处理
 				w.refreshPinnedItems()
 				w.list.Refresh()
@@ -488,12 +489,20 @@ func (w *mainWindow) refreshPinnedItems() {
 			func() {
 				w.openItem(i)
 			},
+			func(steps int) {
+				w.movePinnedItem(i.FullPath, steps)
+			},
+			func(dragX float32) {
+				w.showPinnedDropIndicator(i.FullPath, dragX)
+			},
+			w.hidePinnedDropIndicator,
 		)
 		objects = append(objects, button)
 	}
 
 	w.pinnedIcons.Objects = objects
 	w.pinnedIcons.Refresh()
+	w.hidePinnedDropIndicator()
 
 	if len(objects) == 0 {
 		w.pinnedPanel.Hide()
@@ -503,185 +512,100 @@ func (w *mainWindow) refreshPinnedItems() {
 	w.pinnedPanel.Refresh()
 }
 
-func (w *mainWindow) submitSearch(keyword string) {
-	trimmed := strings.TrimSpace(keyword)
-	w.keyword = trimmed
-	w.setSelectedCategory("")
-
-	if trimmed == "" {
-		w.clearSearchResults()
+func (w *mainWindow) showPinnedDropIndicator(path string, dragX float32) {
+	if w.pinnedDropIndicator == nil || w.pinnedScroll == nil || len(w.pinnedItems) == 0 {
 		return
 	}
 
-	w.scheduleSearch(trimmed, "", false)
-}
-
-func (w *mainWindow) selectCategory(id widget.ListItemID) {
-	if w.suppressCategorySelect {
-		return
-	}
-	if id < 0 || id >= len(w.categories) {
-		return
-	}
-
-	w.scheduleSearch(strings.TrimSpace(w.entry.Text), w.categories[id].ID, true)
-}
-
-func (w *mainWindow) scheduleSearch(keyword, category string, immediate bool) {
-	keyword = strings.TrimSpace(keyword)
-	if keyword == "" {
-		w.clearSearchResults()
-		return
-	}
-
-	w.pendingSearchKeyword = keyword
-	w.pendingSearchCategory = category
-
-	// 判断是否需要“立即执行”
-	if immediate || w.lastSearchDispatchTime.IsZero() ||
-		time.Since(w.lastSearchDispatchTime) >= searchCoalesceDelay {
-		w.cancelScheduledSearch()
-		w.executeSearch(keyword, category)
-		return
-	}
-
-	// 计算需要等待的时间与升级票据
-	delay := searchCoalesceDelay - time.Since(w.lastSearchDispatchTime)
-	w.searchDispatchTicket++
-	ticket := w.searchDispatchTicket
-
-	// 重置旧的定时器
-	if w.searchDispatchTimer != nil {
-		w.searchDispatchTimer.Stop()
-	}
-
-	// 启动新的延迟任务
-	w.searchDispatchTimer = time.AfterFunc(delay, func() {
-		fyne.Do(func() {
-			// 校验票据！如果全局票据变了，说明中间又触发了新的输入，本次定时任务作废
-			if ticket != w.searchDispatchTicket {
-				return
-			}
-
-			w.searchDispatchTimer = nil
-			w.executeSearch(w.pendingSearchKeyword, w.pendingSearchCategory)
-		})
-	})
-}
-
-func (w *mainWindow) cancelScheduledSearch() {
-	w.searchDispatchTicket++
-	if w.searchDispatchTimer != nil {
-		w.searchDispatchTimer.Stop()
-		w.searchDispatchTimer = nil
-	}
-	w.pendingSearchKeyword = ""
-	w.pendingSearchCategory = ""
-}
-
-func (w *mainWindow) clearSearchResults() {
-	w.cancelScheduledSearch()
-	w.searchSeq.Add(1)
-	w.results = nil
-	w.list.UnselectAll()
-	w.list.Refresh()
-	w.status.SetText(defaultSearchStatus)
-}
-
-func (w *mainWindow) executeSearch(keyword, category string) {
-	keyword = strings.TrimSpace(keyword)
-	seq := w.searchSeq.Add(1)
-	w.lastSearchDispatchTime = time.Now()
-	w.keyword = keyword
-	w.activeCategory = category
-	w.list.UnselectAll()
-
-	if category == "" {
-		if w.callbacks.Search == nil {
-			w.status.SetText(searchNotConfigured)
-			return
-		}
-
-		if w.keyword == "" {
-			w.results = nil
-			w.list.Refresh()
-			w.status.SetText(defaultSearchStatus)
-			return
-		}
-
-		w.status.SetText(fmt.Sprintf("正在搜索: %s", w.keyword))
-		searchKeyword := w.keyword
-		go func() {
-			results := w.callbacks.Search(searchKeyword)
-			fyne.Do(func() {
-				w.applySearchResults(seq, category, results)
-			})
-		}()
-		return
-	}
-
-	if w.callbacks.CategorySearch == nil {
-		w.status.SetText(categoryNotConfigured)
-		return
-	}
-
-	w.status.SetText(w.searchStatusText(category))
-	searchKeyword := w.keyword
-	go func() {
-		results := w.callbacks.CategorySearch(searchKeyword, category)
-		fyne.Do(func() {
-			w.applySearchResults(seq, category, results)
-		})
-	}()
-}
-
-func (w *mainWindow) applySearchResults(seq uint64, category string, results []ResultItem) {
-	if seq != w.searchSeq.Load() {
-		return
-	}
-
-	w.results = results
-	w.list.Refresh()
-	w.status.SetText(w.resultStatusText(category, len(results)))
-}
-
-func (w *mainWindow) searchStatusText(category string) string {
-	categoryLabel := w.categoryLabel(category)
-	if w.keyword == "" {
-		return fmt.Sprintf("在 %s 中搜索", categoryLabel)
-	}
-	return fmt.Sprintf("在 %s 中搜索: %s", categoryLabel, w.keyword)
-}
-
-func (w *mainWindow) resultStatusText(category string, count int) string {
-	if category == "" {
-		return fmt.Sprintf("找到 %d 个结果", count)
-	}
-	return fmt.Sprintf("在 %s 中, 找到 %d 个结果", w.categoryLabel(category), count)
-}
-
-func (w *mainWindow) categoryLabel(category string) string {
-	for _, item := range w.categories {
-		if item.ID == category {
-			return item.Label
-		}
-	}
-	return category
-}
-
-func (w *mainWindow) setSelectedCategory(category string) {
-	w.activeCategory = category
-	index := 0
-	for i, item := range w.categories {
-		if item.ID == category {
-			index = i
+	sourceIndex := -1
+	for i, item := range w.pinnedItems {
+		if item.FullPath == path {
+			sourceIndex = i
 			break
 		}
 	}
+	if sourceIndex < 0 || sourceIndex >= len(w.pinnedIcons.Objects) {
+		return
+	}
 
-	w.suppressCategorySelect = true
-	w.categoryList.Select(index)
-	w.suppressCategorySelect = false
+	width := w.pinnedIcons.Objects[sourceIndex].Size().Width
+	if width <= 0 {
+		return
+	}
+	steps := int(math.Round(float64(dragX / width)))
+	targetIndex := sourceIndex + steps
+	if targetIndex < 0 {
+		targetIndex = 0
+	}
+	if targetIndex >= len(w.pinnedItems) {
+		targetIndex = len(w.pinnedItems) - 1
+	}
+
+	// 向右移动时落点在线目标项右侧；向左移动时落点在线目标项左侧。
+	boundaryIndex := targetIndex
+	if targetIndex > sourceIndex {
+		boundaryIndex++
+	}
+	boundaryX := float32(0)
+	if boundaryIndex >= len(w.pinnedIcons.Objects) {
+		last := w.pinnedIcons.Objects[len(w.pinnedIcons.Objects)-1]
+		boundaryX = last.Position().X + last.Size().Width
+	} else {
+		boundaryX = w.pinnedIcons.Objects[boundaryIndex].Position().X
+	}
+
+	visibleX := boundaryX - w.pinnedScroll.Offset.X
+	visibleX = fyne.Max(0, fyne.Min(visibleX, w.pinnedScroll.Size().Width))
+	height := w.pinnedScroll.Size().Height
+	if height <= 0 {
+		return
+	}
+	w.pinnedDropIndicator.Move(fyne.NewPos(visibleX-1, 0))
+	w.pinnedDropIndicator.Resize(fyne.NewSize(3, height))
+	w.pinnedDropIndicator.Show()
+	w.pinnedDropIndicator.Refresh()
+}
+
+func (w *mainWindow) hidePinnedDropIndicator() {
+	if w.pinnedDropIndicator != nil {
+		w.pinnedDropIndicator.Hide()
+	}
+}
+
+func (w *mainWindow) movePinnedItem(path string, steps int) {
+	if steps == 0 || w.callbacks.MovePinnedItem == nil {
+		return
+	}
+
+	sourceIndex := -1
+	for i, item := range w.pinnedItems {
+		if item.FullPath == path {
+			sourceIndex = i
+			break
+		}
+	}
+	if sourceIndex < 0 {
+		return
+	}
+
+	targetIndex := sourceIndex + steps
+	if targetIndex < 0 {
+		targetIndex = 0
+	}
+	if targetIndex >= len(w.pinnedItems) {
+		targetIndex = len(w.pinnedItems) - 1
+	}
+	if targetIndex == sourceIndex {
+		return
+	}
+	if !w.callbacks.MovePinnedItem(path, targetIndex) {
+		w.status.SetText("固定图标排序保存失败")
+		return
+	}
+
+	w.refreshPinnedItems()
+	w.list.Refresh()
+	w.status.SetText("固定图标顺序已更新")
 }
 
 func (w *mainWindow) openSelected(id widget.ListItemID) {

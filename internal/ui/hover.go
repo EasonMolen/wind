@@ -16,6 +16,8 @@ type hoverCatcher struct {
 	onOut       func()
 	onTapped    func()
 	onSecondary func(*fyne.PointEvent)
+	onDragged   func(*fyne.DragEvent)
+	onDragEnd   func()
 }
 
 func newHoverCatcher(onIn, onOut func(), onTapped func(), onSecondary func(event *fyne.PointEvent)) *hoverCatcher {
@@ -60,6 +62,19 @@ func (h *hoverCatcher) TappedSecondary(pe *fyne.PointEvent) {
 
 }
 
+func (h *hoverCatcher) Dragged(event *fyne.DragEvent) {
+	if h.onDragged != nil {
+		h.onDragged(event)
+	}
+}
+
+func (h *hoverCatcher) DragEnd() {
+	if h.onDragEnd != nil {
+		h.onDragEnd()
+	}
+}
+
 var _ desktop.Hoverable = (*hoverCatcher)(nil)
 var _ fyne.Tappable = (*hoverCatcher)(nil)
 var _ fyne.SecondaryTappable = (*hoverCatcher)(nil)
+var _ fyne.Draggable = (*hoverCatcher)(nil)

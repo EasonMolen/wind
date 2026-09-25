@@ -21,6 +21,7 @@ type Config struct {
 	Launcher LauncherConfig `json:"launcher"`
 	Icon     IconConfig     `json:"icon"`
 	Display  DisplayConfig  `json:"display"`
+	Update   UpdateConfig   `json:"update"`
 	Pins     []Pins         `json:"pins"`
 }
 
@@ -54,6 +55,12 @@ type DisplayConfig struct {
 	ShowCharacter bool `json:"showCharacter"`
 }
 
+// UpdateConfig intentionally keeps the endpoint out of the settings dialog.
+// Release infrastructure controls it, while users only request a check.
+type UpdateConfig struct {
+	ManifestURL string `json:"manifestUrl"`
+}
+
 type Pins struct {
 	Path string `json:"path"`
 	Name string `json:"name"`
@@ -67,7 +74,9 @@ type CfgService interface {
 	Path() string
 	GetPinDisplayName(path string) (string, bool)
 	TogglePin(path string, name string) (bool, error)
+	MovePin(path string, targetIndex int) error
 	PinnedNum() int
+	UpdatePinnedName(oldPath, newPath string) error
 }
 
 type cfgService struct {
@@ -113,7 +122,7 @@ func DefaultConfig() Config {
 			EnableExtRouting: true,
 		},
 		Display: DisplayConfig{
-			ShowCharacter: false,
+			ShowCharacter: true,
 		},
 		Pins: []Pins{},
 	}
@@ -228,6 +237,70 @@ func (s *cfgService) TogglePin(path string, name string) (bool, error) {
 	})
 	s.syncPinMap()
 	return true, nil
+}
+
+// MovePin 将指定固定项移动到目标索引。targetIndex 使用移动前的显示序号：
+// 例如把第 1 项移动到第 3 项的位置，传入 2 即可。
+func (s *cfgService) MovePin(path string, targetIndex int) error {
+	cleanPath := cleanPinPath(path)
+	if cleanPath == "" {
+		return errors.New("pin path is empty")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	sourceIndex := -1
+	key := pinKey(cleanPath)
+	for i, pin := range s.cfg.Pins {
+		if pinKey(pin.Path) == key {
+			sourceIndex = i
+			break
+		}
+	}
+	if sourceIndex < 0 {
+		return errors.New("pin not found")
+	}
+
+	pins := append([]Pins(nil), s.cfg.Pins...)
+	moved := pins[sourceIndex]
+	pins = append(pins[:sourceIndex], pins[sourceIndex+1:]...)
+	if targetIndex < 0 {
+		targetIndex = 0
+	}
+	if targetIndex > len(pins) {
+		targetIndex = len(pins)
+	}
+	pins = append(pins, Pins{})
+	copy(pins[targetIndex+1:], pins[targetIndex:])
+	pins[targetIndex] = moved
+
+	s.cfg.Pins = pins
+	s.syncPinMap()
+	return nil
+}
+
+func (s *cfgService) UpdatePinnedName(oldPath, newPath string) error {
+	cleanOldPath := cleanPinPath(oldPath)
+	cleanNewPath := cleanPinPath(newPath)
+	if cleanNewPath == "" {
+		return errors.New("new path is empty")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	oldKey := pinKey(cleanOldPath)
+	for i, pin := range s.cfg.Pins {
+		if pinKey(pin.Path) == oldKey {
+			s.cfg.Pins[i].Path = cleanNewPath
+			s.cfg.Pins[i].Name = filepath.Base(cleanNewPath)
+			s.syncPinMap()
+			return nil
+		}
+	}
+
+	return errors.New("pin not found")
 }
 
 func (s *cfgService) PinnedNum() int {

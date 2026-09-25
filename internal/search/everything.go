@@ -3,7 +3,7 @@ package search
 /*
 //#cgo CFLAGS: -I${SRCDIR}/sdk/include -D_WIN32_WINNT=0x0600
 #cgo CFLAGS: -I./sdk/include
-#cgo LDFLAGS: -L../../ -lEverything64
+#cgo LDFLAGS: -L./sdk/lib -lEverything64
 
 #include <windows.h>
 #include "Everything.h"
@@ -11,12 +11,17 @@ package search
 import "C"
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 	"unicode/utf16"
 	"unsafe"
 )
+
+// ErrIPCUnavailable 表示 Everything 的 SDK DLL 已加载，但后台 Everything
+// 进程尚未准备好接受 IPC 查询。
+var ErrIPCUnavailable = errors.New("everything IPC is unavailable")
 
 // EverythingClient 封装 Everything 客户端（线程安全）
 type EverythingClient struct {
@@ -34,6 +39,7 @@ type EverythingService interface {
 	Search(keyword string) ([]ResultSearch, error)
 
 	CategorySearch(keyword, category string) ([]ResultSearch, error)
+	SetMaxResults(maxResults int)
 }
 
 func NewEverythingService(maxResults int) EverythingService {
@@ -42,8 +48,17 @@ func NewEverythingService(maxResults int) EverythingService {
 			sem: make(chan struct{}, 10),
 		}
 	})
-	instance.FilterEngine = NewFilterEngine(maxResults)
+	instance.SetMaxResults(maxResults)
 	return instance
+}
+
+func (e *EverythingClient) SetMaxResults(maxResults int) {
+	if maxResults <= 0 {
+		maxResults = 50
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.FilterEngine = NewFilterEngine(maxResults)
 }
 
 // ResultSearch 对应 Everything 搜索出来的完整元数据
@@ -55,6 +70,7 @@ type ResultSearch struct {
 	ModifiedTime time.Time // 修改时间
 	CreatedTime  time.Time // 创建时间
 	IsFolder     bool      // 是否是文件夹
+	IsPathEntry  bool      // 是否来自用户/系统 PATH（仅用于排序，不展示）
 }
 
 func (e *EverythingClient) Search(keyword string) ([]ResultSearch, error) {
@@ -102,11 +118,10 @@ func (e *EverythingClient) searchWithContext(ctx context.Context, keyword string
 		C.Everything_SetRegex(C.BOOL(0))
 
 		// 设置结果数量限制
-		if e.maxResults > 0 {
-			C.Everything_SetMax(C.DWORD(e.maxResults))
-		} else {
-			C.Everything_SetMax(C.DWORD(200)) // 默认限制200条防止暴涨
-		}
+		// 先取得足够大的候选池，再由 FilterEngine 过滤、排序并截断。
+		// 以前直接限制为 UI 的 50 条，C 盘结果很容易被系统和缓存目录占满，
+		// 后续过滤后甚至会没有可展示的 C 盘内容。
+		C.Everything_SetMax(C.DWORD(e.candidateLimit()))
 
 		// 请求全部信息标志位：文件名、路径、全路径、大小、修改时间、创建时间
 		requestFlags := C.EVERYTHING_REQUEST_FILE_NAME |
@@ -120,6 +135,10 @@ func (e *EverythingClient) searchWithContext(ctx context.Context, keyword string
 		// 执行查询 (TRUE 代表同步阻塞等待 IPC 返回)
 		if C.Everything_QueryW(C.BOOL(1)) == C.FALSE {
 			errCode := C.Everything_GetLastError()
+			if errCode == C.EVERYTHING_ERROR_IPC {
+				resultCh <- queryResult{err: fmt.Errorf("%w (error code: %d)", ErrIPCUnavailable, int(errCode))}
+				return
+			}
 			// 【已修复】原 string(rune(errCode)) 会转成非打印字符，改用 fmt.Errorf
 			resultCh <- queryResult{err: fmt.Errorf("everything query failed, error code: %d", int(errCode))}
 			return
@@ -188,8 +207,34 @@ func (e *EverythingClient) searchWithContext(ctx context.Context, keyword string
 	case <-ctx.Done():
 		return nil, fmt.Errorf("everything search timeout or canceled: %w", ctx.Err())
 	case res := <-resultCh:
-		return e.Filter(res.data, keyword), res.err
+		if res.err != nil {
+			return nil, res.err
+		}
+		return e.filter(append(res.data, searchPathEntries(keyword)...), keyword), nil
 	}
+}
+
+func (e *EverythingClient) filter(results []ResultSearch, keyword string) []ResultSearch {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.FilterEngine.Filter(results, keyword)
+}
+
+func (e *EverythingClient) candidateLimit() int {
+	const (
+		defaultDisplayLimit = 50
+		candidateMultiplier = 20
+		maxCandidateLimit   = 1000
+	)
+	limit := e.maxResults
+	if limit <= 0 {
+		limit = defaultDisplayLimit
+	}
+	limit *= candidateMultiplier
+	if limit > maxCandidateLimit {
+		return maxCandidateLimit
+	}
+	return limit
 }
 
 // 辅助函数：C.WCHAR 指针转 Go string

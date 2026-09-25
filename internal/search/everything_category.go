@@ -87,11 +87,7 @@ func (e *EverythingClient) categorySearchWithContext(ctx context.Context, keywor
 		C.Everything_SetMatchPath(C.BOOL(0))
 		C.Everything_SetRegex(C.BOOL(0))
 
-		if e.maxResults > 0 {
-			C.Everything_SetMax(C.DWORD(e.maxResults))
-		} else {
-			C.Everything_SetMax(C.DWORD(200))
-		}
+		C.Everything_SetMax(C.DWORD(e.candidateLimit()))
 
 		requestFlags := C.EVERYTHING_REQUEST_FILE_NAME |
 			C.EVERYTHING_REQUEST_PATH |
@@ -103,6 +99,10 @@ func (e *EverythingClient) categorySearchWithContext(ctx context.Context, keywor
 
 		if C.Everything_QueryW(C.BOOL(1)) == C.FALSE {
 			errCode := C.Everything_GetLastError()
+			if errCode == C.EVERYTHING_ERROR_IPC {
+				resultCh <- queryResult{err: fmt.Errorf("%w (error code: %d)", ErrIPCUnavailable, int(errCode))}
+				return
+			}
 			resultCh <- queryResult{err: fmt.Errorf("everything query failed, error code: %d", int(errCode))}
 			return
 		}
@@ -160,19 +160,20 @@ func (e *EverythingClient) categorySearchWithContext(ctx context.Context, keywor
 	case <-ctx.Done():
 		return nil, fmt.Errorf("everything search timeout or canceled: %w", ctx.Err())
 	case res := <-resultCh:
-		return e.Filter(res.data, keyword), res.err
+		if res.err != nil {
+			return nil, res.err
+		}
+		if category == "" || category == "executable" {
+			res.data = append(res.data, searchPathEntries(keyword)...)
+		}
+		return e.filter(res.data, keyword), nil
 	}
 }
 
 func buildCategorySearchQuery(keyword, category string) (string, error) {
 	trimmedKeyword := strings.TrimSpace(keyword)
 
-	// 用户未输入关键词：返回空查询，不视为错误
-	if trimmedKeyword == "" {
-		return "", nil
-	}
-
-	// 无分类筛选：直接返回关键词
+	// 无分类筛选：直接返回关键词（空关键词不会发起查询）。
 	if category == "" {
 		return trimmedKeyword, nil
 	}
@@ -182,9 +183,9 @@ func buildCategorySearchQuery(keyword, category string) (string, error) {
 		if def.ID != category {
 			continue
 		}
-		//if trimmedKeyword == "" {
-		//	return def.Query, nil
-		//}
+		if trimmedKeyword == "" {
+			return def.Query, nil
+		}
 		return fmt.Sprintf("%s %s", trimmedKeyword, def.Query), nil
 	}
 

@@ -6,10 +6,10 @@ import (
 )
 
 func TestCategoryEverythingSearch(t *testing.T) {
-	client := NewEverythingService()
+	client := NewEverythingService(20)
 
 	// 测试搜索一个常见的关键字，例如 ".go" 或某个文件夹名
-	results, err := client.CategorySearch("goland64", "executable", 20)
+	results, err := client.CategorySearch("goland64", "executable")
 	if err != nil {
 		t.Fatalf("Search failed: %v", err)
 	}

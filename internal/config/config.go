@@ -13,9 +13,10 @@ import (
 )
 
 const (
-	appDirName     = "newwind"
-	configFileName = "config.json"
-	linkName       = "NewWind.lnk"
+	appDirName               = "newwind"
+	configFileName           = "config.json"
+	linkName                 = "NewWind.lnk"
+	defaultUpdateManifestURL = "https://api.github.com/repos/EasonMolen/wind/releases/latest"
 )
 
 type Config struct {
@@ -132,6 +133,9 @@ func DefaultConfig() Config {
 		},
 		Display: DisplayConfig{
 			ShowCharacter: true,
+		},
+		Update: UpdateConfig{
+			ManifestURL: defaultUpdateManifestURL,
 		},
 		Pins: []Pins{},
 	}
@@ -426,6 +430,9 @@ func normalize(cfg Config) Config {
 	}
 	if cfg.Icon.DefaultTimeoutMS <= 0 {
 		cfg.Icon.DefaultTimeoutMS = def.Icon.DefaultTimeoutMS
+	}
+	if strings.TrimSpace(cfg.Update.ManifestURL) == "" {
+		cfg.Update.ManifestURL = def.Update.ManifestURL
 	}
 
 	cfg.Pins = normalizePins(cfg.Pins)

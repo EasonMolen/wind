@@ -38,7 +38,27 @@ NewWind 会在 SDK 报告 IPC 不可用时启动同包的
 
 ## 更新清单
 
-自动检查通过配置文件的 `update.manifestUrl` 获取 HTTPS JSON。清单格式：
+默认更新源已指向本项目的 GitHub Release API：
+
+```text
+https://api.github.com/repos/EasonMolen/wind/releases/latest
+```
+
+不需要另建 manifest。请为每个 Release 使用语义化标签（例如 `v0.1.0`），并上传
+名称包含 `windows-amd64` 的 ZIP 资源；程序会读取 GitHub 的 `tag_name`、发布说明和
+对应 ZIP 下载地址。
+
+如需改用自建更新源，可在 `config.json` 中覆盖：
+
+```json
+{
+  "update": {
+    "manifestUrl": "https://api.github.com/repos/EasonMolen/wind/releases/latest"
+  }
+}
+```
+
+自建源也可继续使用以下紧凑 JSON 格式：
 
 ```json
 {

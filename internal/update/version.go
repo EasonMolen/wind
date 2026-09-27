@@ -28,12 +28,15 @@ func newerThan(latest, current string) (bool, error) {
 	return false, nil
 }
 
-func parseVersion(value string) ([3]int, error) {
-	var result [3]int
+// parseVersion supports both semantic three-part versions (1.2.3) and the
+// four-part Windows version format (1.2.3.4). A missing build component is
+// treated as zero, so 1.2.3 and 1.2.3.0 compare as equal.
+func parseVersion(value string) ([4]int, error) {
+	var result [4]int
 	base := strings.SplitN(normalizeVersion(value), "-", 2)[0]
 	parts := strings.Split(base, ".")
-	if len(parts) != 3 {
-		return result, fmt.Errorf("expected major.minor.patch")
+	if len(parts) != 3 && len(parts) != 4 {
+		return result, fmt.Errorf("expected major.minor.patch or major.minor.patch.build")
 	}
 	for index, part := range parts {
 		parsed, err := strconv.Atoi(part)

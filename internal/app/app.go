@@ -111,6 +111,10 @@ func (a *App) Run() error {
 	if err := a.registerToggleHotkey(); err != nil {
 		return err
 	}
+	// Start the bundled portable search engine before the main window becomes
+	// interactive. Manager.Start only creates the background process; it does
+	// not wait for Everything to exit or show an Everything search window.
+	a.startPortableEverything()
 
 	go func() {
 		if err := a.hotkey.Listen(a.ctx); err != nil {
@@ -125,6 +129,20 @@ func (a *App) Run() error {
 	a.fyneApp.Run()
 	a.Cleanup()
 	return nil
+}
+
+func (a *App) startPortableEverything() {
+	if a.runtime == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(a.ctx, 3*time.Second)
+	defer cancel()
+	if err := a.runtime.Start(ctx); err != nil {
+		// A developer may run from source without runtime/Everything.exe, or a
+		// user may already rely on a separately installed Everything instance.
+		// Search remains available in the latter case, so startup is non-fatal.
+		log.Printf("启动内置 Everything 失败: %v", err)
+	}
 }
 
 func (a *App) Quit() {

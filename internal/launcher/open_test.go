@@ -108,6 +108,15 @@ func TestOpener_OpenAsync(t *testing.T) {
 	}
 }
 
+func TestIsAppsFolderTarget(t *testing.T) {
+	if !isAppsFolderTarget("shell:AppsFolder\\Microsoft.WindowsStore_8wekyb3d8bbwe!App") {
+		t.Fatal("expected AppsFolder target to be recognized")
+	}
+	if isAppsFolderTarget("C:\\Programs\\app.exe") {
+		t.Fatal("ordinary executable must not be treated as an AppsFolder target")
+	}
+}
+
 // TestOpener_ConcurrencyStress 并发压力与并发限流保护测试
 func TestOpener_ConcurrencyStress(t *testing.T) {
 	// 限制最大并发为 3

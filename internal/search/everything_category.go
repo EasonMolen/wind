@@ -1,9 +1,8 @@
 package search
 
 /*
-//#cgo CFLAGS: -I${SRCDIR}/sdk/include -D_WIN32_WINNT=0x0600
-#cgo CFLAGS: -I./sdk/include
-#cgo LDFLAGS: -L../../ -lEverything64
+#cgo CFLAGS: -I${SRCDIR}/sdk/include -D_WIN32_WINNT=0x0600
+#cgo LDFLAGS: -L${SRCDIR}/sdk/lib -lEverything64
 
 #include <windows.h>
 #include "Everything.h"
@@ -164,7 +163,7 @@ func (e *EverythingClient) categorySearchWithContext(ctx context.Context, keywor
 			return nil, res.err
 		}
 		if category == "" || category == "executable" {
-			res.data = append(res.data, searchPathEntries(keyword)...)
+			res.data = append(res.data, searchSupplementalLaunchers(keyword)...)
 		}
 		return e.filter(res.data, keyword), nil
 	}

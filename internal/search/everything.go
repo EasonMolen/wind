@@ -1,9 +1,8 @@
 package search
 
 /*
-//#cgo CFLAGS: -I${SRCDIR}/sdk/include -D_WIN32_WINNT=0x0600
-#cgo CFLAGS: -I./sdk/include
-#cgo LDFLAGS: -L./sdk/lib -lEverything64
+#cgo CFLAGS: -I${SRCDIR}/sdk/include -D_WIN32_WINNT=0x0600
+#cgo LDFLAGS: -L${SRCDIR}/sdk/lib -lEverything64
 
 #include <windows.h>
 #include "Everything.h"
@@ -71,6 +70,9 @@ type ResultSearch struct {
 	CreatedTime  time.Time // 创建时间
 	IsFolder     bool      // 是否是文件夹
 	IsPathEntry  bool      // 是否来自用户/系统 PATH（仅用于排序，不展示）
+	// IsApplicationEntry marks an App Paths registration or a Start Menu shortcut.
+	// These entries must survive the generic system-directory noise filter.
+	IsApplicationEntry bool
 }
 
 func (e *EverythingClient) Search(keyword string) ([]ResultSearch, error) {
@@ -210,7 +212,7 @@ func (e *EverythingClient) searchWithContext(ctx context.Context, keyword string
 		if res.err != nil {
 			return nil, res.err
 		}
-		return e.filter(append(res.data, searchPathEntries(keyword)...), keyword), nil
+		return e.filter(append(res.data, searchSupplementalLaunchers(keyword)...), keyword), nil
 	}
 }
 

@@ -48,3 +48,18 @@ func TestPathSearchReturnsOnlyMatchingLaunchers(t *testing.T) {
 		}
 	}
 }
+
+func TestFilterKeepsPathEntriesInSystemDirectories(t *testing.T) {
+	engine := NewFilterEngine(20)
+	results := []ResultSearch{{
+		FullPath:    `C:\Windows\System32\cmd.exe`,
+		FileName:    "cmd.exe",
+		Path:        `C:\Windows\System32`,
+		IsPathEntry: true,
+	}}
+
+	got := engine.Filter(results, "cmd")
+	if len(got) != 1 || got[0].FullPath != results[0].FullPath {
+		t.Fatalf("PATH entry in a system directory was filtered out: %#v", got)
+	}
+}

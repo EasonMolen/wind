@@ -14,6 +14,14 @@ func searchPathEntries(keyword string) []ResultSearch {
 	return searchPathEntriesInDirectories(keyword, systemAndUserPathDirectories())
 }
 
+// searchSupplementalLaunchers adds launch targets that Everything frequently
+// cannot expose. PATH can include system directories, while Store apps are
+// commonly surfaced as Start Menu shortcuts instead of indexable executables.
+func searchSupplementalLaunchers(keyword string) []ResultSearch {
+	results := searchPathEntries(keyword)
+	return append(results, searchInstalledApplicationEntries(keyword)...)
+}
+
 func searchPathEntriesInDirectories(keyword string, directories []string) []ResultSearch {
 	keyword = strings.ToLower(strings.TrimSpace(keyword))
 	if keyword == "" {

@@ -82,6 +82,13 @@ func (op *Opener) Open(ctx context.Context, path string) error {
 		return fmt.Errorf("%w: %v", ErrTimeout, err)
 	}
 
+	if isAppsFolderTarget(path) {
+		if err := exec.Command("explorer.exe", path).Start(); err != nil {
+			return fmt.Errorf("failed to open Start app [%s]: %w", path, err)
+		}
+		return nil
+	}
+
 	if err := open.Start(path); err != nil {
 		return fmt.Errorf("failed to open path [%s]: %w", path, err)
 	}
@@ -148,4 +155,8 @@ func (op *Opener) Close() error {
 func cleaninput(input string) string {
 	r := strings.NewReplacer("&", "^&")
 	return r.Replace(input)
+}
+
+func isAppsFolderTarget(path string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(path)), "shell:appsfolder\\")
 }

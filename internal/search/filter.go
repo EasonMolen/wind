@@ -75,8 +75,9 @@ func (fe *FilterEngine) Filter(results []ResultSearch, keyword string) []ResultS
 	n := 0
 	seenPaths := make(map[string]int, len(results))
 	for _, r := range results {
-		// 排除系统或隐藏路径（直接使用 FullPath 校验）
-		if fe.isSystemPath(r.FullPath) {
+		// PATH 与已安装应用是独立于 Everything 索引补齐的启动入口。它们
+		// 可以合理地位于 C:\\Windows 或 ProgramData，不能套用普通文件的噪声过滤。
+		if !r.IsPathEntry && !r.IsApplicationEntry && fe.isSystemPath(r.FullPath) {
 			continue
 		}
 		pathKey := normalizeSearchPath(r.FullPath)
@@ -84,6 +85,9 @@ func (fe *FilterEngine) Filter(results []ResultSearch, keyword string) []ResultS
 			// 同一文件既被 Everything 找到又位于 PATH 时，保留 PATH 的排序优势。
 			if r.IsPathEntry {
 				results[index].IsPathEntry = true
+			}
+			if r.IsApplicationEntry {
+				results[index].IsApplicationEntry = true
 			}
 			continue
 		}
@@ -202,6 +206,9 @@ func calculateScore(r ResultSearch, keyword string, now time.Time) int {
 	}
 	if r.IsPathEntry {
 		score += 120 // PATH 中可直接执行的命令，是启动器最有价值的结果之一
+	}
+	if r.IsApplicationEntry {
+		score += 110 // 注册应用和开始菜单项是可直接启动的软件入口
 	}
 
 	// (2) 用户数据盘/常用目录提权

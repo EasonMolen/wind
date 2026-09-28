@@ -39,8 +39,8 @@ try {
         go test ./internal/config ./internal/hotkey ./internal/launcher ./internal/ui
     }
 
-    $ldflags = "-X wind/internal/buildinfo.Version=$releaseVersion"
-    go build -trimpath -ldflags $ldflags -o (Join-Path $releaseDirectory 'NewWind.exe') ./cmd/launcher
+    $ldflags = "-H windowsgui -X wind/internal/buildinfo.Version=$releaseVersion"
+    go build -trimpath -ldflags $ldflags  -o (Join-Path $releaseDirectory 'NewWind.exe') ./cmd/launcher
 
     Copy-Item -LiteralPath $sdkDll -Destination (Join-Path $releaseDirectory 'Everything64.dll')
     Copy-Item -LiteralPath $runtimeExecutable -Destination (Join-Path $releaseDirectory 'runtime\Everything.exe')

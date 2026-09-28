@@ -2,6 +2,15 @@
 
 Windows x64 文件启动器，使用 Everything SDK 提供实时文件搜索。
 
+除 Everything 的索引结果外，NewWind 还会补充扫描进程、当前用户和系统
+`PATH` 中的一层可执行文件；这些命中不会被普通系统目录过滤丢弃。同时会读取
+Windows 的 **App Paths** 注册项、开始菜单和开始应用列表，因此可发现 Office（如
+Word、Excel、PowerPoint）的安装入口，以及微软商店应用的可启动项。
+
+`internal/search/sdk/` 是最小化的编译期 SDK：`include/Everything.h` 提供 CGO
+头文件，`lib/Everything64.lib` 提供 x64 导入库。二者都不能删除；运行时 DLL
+仍由项目根目录的 `Everything64.dll` 在打包时复制到发布目录。
+
 ## 开发要求
 
 - Go 1.25+

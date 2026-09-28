@@ -79,36 +79,37 @@ type MainWindow interface {
 }
 
 type mainWindow struct {
-	ctx                    context.Context
-	window                 fyne.Window
-	callbacks              Callbacks
-	entry                  *widget.Entry
-	iconEngine             *icon.Engine
-	pinnedIcons            *fyne.Container
-	pinnedScroll           *container.Scroll
-	pinnedDropIndicator    *canvas.Rectangle
-	pinnedItems            []ResultItem
-	pinnedPanel            *fyne.Container
-	categoryList           *widget.List
-	categories             []SearchCategory
-	suppressCategorySelect bool
-	list                   *widget.List
-	status                 *widget.Label
-	results                []ResultItem
-	keyword                string
-	activeCategory         string
-	visible                atomic.Bool
-	searchSeq              atomic.Uint64
-	searchDispatchTimer    *time.Timer
-	searchDispatchTicket   uint64
-	pendingSearchKeyword   string
-	pendingSearchCategory  string
-	lastSearchDispatchTime time.Time // 最后一次搜索发送的时间
-	hideOnOpen             bool
-	suppressOpenOnSelect   bool
-	showCharacter          bool
-	Width                  float32
-	Height                 float32
+	ctx                        context.Context
+	window                     fyne.Window
+	callbacks                  Callbacks
+	entry                      *widget.Entry
+	iconEngine                 *icon.Engine
+	pinnedIcons                *fyne.Container
+	pinnedScroll               *container.Scroll
+	updatePinnedScrollControls func()
+	pinnedDropIndicator        *canvas.Rectangle
+	pinnedItems                []ResultItem
+	pinnedPanel                *fyne.Container
+	categoryList               *widget.List
+	categories                 []SearchCategory
+	suppressCategorySelect     bool
+	list                       *widget.List
+	status                     *widget.Label
+	results                    []ResultItem
+	keyword                    string
+	activeCategory             string
+	visible                    atomic.Bool
+	searchSeq                  atomic.Uint64
+	searchDispatchTimer        *time.Timer
+	searchDispatchTicket       uint64
+	pendingSearchKeyword       string
+	pendingSearchCategory      string
+	lastSearchDispatchTime     time.Time // 最后一次搜索发送的时间
+	hideOnOpen                 bool
+	suppressOpenOnSelect       bool
+	showCharacter              bool
+	Width                      float32
+	Height                     float32
 }
 
 const (
@@ -182,26 +183,23 @@ func NewMainWindow(ctx context.Context, app fyne.App, ie *icon.Engine, opts Wind
 	var leftBtn, rightBtn *widget.Button
 
 	updateArrowButtons := func() {
-		// 内容比设定的宽度小,不显示箭头
-		if pinnedScroll.Content.Size().Width <= pinnedScroll.Size().Width {
+		maxOffset := pinnedScrollMaxOffset(
+			pinnedScroll.Content.Size().Width,
+			pinnedScroll.Size().Width,
+		)
+		if maxOffset == 0 {
 			leftBtn.Disable()
 			rightBtn.Disable()
 			return
 		}
 
-		// 根据滚动位置禁用对应按钮
 		if pinnedScroll.Offset.X <= 0 {
 			leftBtn.Disable()
-			rightBtn.Enable()
 		} else {
 			leftBtn.Enable()
-			rightBtn.Enable()
 		}
-
-		maxOffset := pinnedScroll.Content.Size().Width - pinnedScroll.Size().Width
 		if pinnedScroll.Offset.X >= maxOffset {
 			rightBtn.Disable()
-			leftBtn.Enable()
 		} else {
 			rightBtn.Enable()
 		}
@@ -214,21 +212,19 @@ func NewMainWindow(ctx context.Context, app fyne.App, ie *icon.Engine, opts Wind
 		if newOffset < 0 {
 			newOffset = 0
 		}
-		pinnedScroll.Offset.X = newOffset
-		pinnedScroll.Refresh()
+		pinnedScroll.ScrollToOffset(fyne.NewPos(newOffset, pinnedScroll.Offset.Y))
 		updateArrowButtons()
 	})
 
 	// 创建右箭头按钮
 	rightBtn = widget.NewButtonWithIcon("", theme.NavigateNextIcon(), func() {
 		scrollStep := pinnedScroll.Size().Width
-		maxOffset := pinnedScroll.Content.Size().Width - pinnedScroll.Size().Width
+		maxOffset := pinnedScrollMaxOffset(pinnedScroll.Content.Size().Width, pinnedScroll.Size().Width)
 		newOffset := pinnedScroll.Offset.X + scrollStep
 		if newOffset > maxOffset {
 			newOffset = maxOffset
 		}
-		pinnedScroll.Offset.X = newOffset
-		pinnedScroll.Refresh()
+		pinnedScroll.ScrollToOffset(fyne.NewPos(newOffset, pinnedScroll.Offset.Y))
 		updateArrowButtons()
 	})
 
@@ -240,6 +236,7 @@ func NewMainWindow(ctx context.Context, app fyne.App, ie *icon.Engine, opts Wind
 	pinnedScroll.OnScrolled = func(position fyne.Position) {
 		updateArrowButtons()
 	}
+	w.updatePinnedScrollControls = updateArrowButtons
 
 	// 构建最终面板：左右箭头 + 滚动区域
 	w.pinnedPanel = container.NewBorder(
@@ -510,6 +507,23 @@ func (w *mainWindow) refreshPinnedItems() {
 		w.pinnedPanel.Show()
 	}
 	w.pinnedPanel.Refresh()
+	w.refreshPinnedScrollControls()
+}
+
+func pinnedScrollMaxOffset(contentWidth, viewportWidth float32) float32 {
+	if contentWidth <= viewportWidth {
+		return 0
+	}
+	return contentWidth - viewportWidth
+}
+
+func (w *mainWindow) refreshPinnedScrollControls() {
+	if w.updatePinnedScrollControls == nil {
+		return
+	}
+	// HBox 尺寸会在当前刷新周期的布局阶段更新；延迟到下一次 UI 刷新后再读取，
+	// 才能得到新增、删除固定项后的真实内容宽度。
+	fyne.Do(w.updatePinnedScrollControls)
 }
 
 func (w *mainWindow) showPinnedDropIndicator(path string, dragX float32) {

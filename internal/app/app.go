@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"path/filepath"
 	"time"
 	"wind/internal/buildinfo"
@@ -78,6 +79,8 @@ func NewApp(fa fyne.App) (*App, error) {
 		Title:         cfg.Window.Title,
 		Width:         cfg.Window.Width,
 		Height:        cfg.Window.Height,
+		PositionX:     cfg.Window.PositionX,
+		PositionY:     cfg.Window.PositionY,
 		HideOnOpen:    cfg.Window.HideOnOpen,
 		Categories:    buildSearchCategories(),
 		ShowCharacter: cfg.Display.ShowCharacter,
@@ -366,6 +369,8 @@ func (a *App) settings() ui.Settings {
 		HideOnOpen:    cfg.Window.HideOnOpen,
 		ShowCharacter: cfg.Display.ShowCharacter,
 		MaxResults:    cfg.Search.MaxResults,
+		PositionX:     cfg.Window.PositionX,
+		PositionY:     cfg.Window.PositionY,
 		Version:       buildinfo.Version,
 	}
 }
@@ -390,6 +395,11 @@ func (a *App) saveSettings(settings ui.Settings) error {
 	if settings.MaxResults < 10 || settings.MaxResults > 200 {
 		return fmt.Errorf("最大搜索结果必须是 10 到 200 之间的整数")
 	}
+	if math.IsNaN(float64(settings.PositionX)) || math.IsInf(float64(settings.PositionX), 0) ||
+		math.IsNaN(float64(settings.PositionY)) || math.IsInf(float64(settings.PositionY), 0) ||
+		settings.PositionX < 0 || settings.PositionX > 1 || settings.PositionY < 0 || settings.PositionY > 1 {
+		return fmt.Errorf("窗口位置 X 和 Y 必须是 0 到 1 之间的数字")
+	}
 
 	previous := a.config.Get()
 	updated := previous
@@ -397,6 +407,8 @@ func (a *App) saveSettings(settings ui.Settings) error {
 	updated.Window.ShowOnStart = settings.ShowOnStart
 	updated.Launcher.StartAutomaticallyOnBoot = settings.StartOnBoot
 	updated.Window.HideOnOpen = settings.HideOnOpen
+	updated.Window.PositionX = settings.PositionX
+	updated.Window.PositionY = settings.PositionY
 	updated.Display.ShowCharacter = settings.ShowCharacter
 	updated.Search.MaxResults = settings.MaxResults
 

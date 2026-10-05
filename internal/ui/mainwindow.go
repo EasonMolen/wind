@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"image/png"
+	"log"
 	"math"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
 	"wind/internal/icon"
+	"wind/internal/window"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -62,6 +64,8 @@ type WindowOptions struct {
 	Title         string
 	Width         float32
 	Height        float32
+	PositionX     float32
+	PositionY     float32
 	HideOnOpen    bool
 	Categories    []SearchCategory
 	ShowCharacter bool
@@ -110,6 +114,8 @@ type mainWindow struct {
 	showCharacter              bool
 	Width                      float32
 	Height                     float32
+	PositionX                  float32
+	PositionY                  float32
 }
 
 const (
@@ -155,6 +161,8 @@ func NewMainWindow(ctx context.Context, app fyne.App, ie *icon.Engine, opts Wind
 		categories:    normalizeCategories(opts.Categories),
 		Width:         opts.Width,
 		Height:        opts.Height,
+		PositionX:     opts.PositionX,
+		PositionY:     opts.PositionY,
 		showCharacter: opts.ShowCharacter,
 	}
 
@@ -426,6 +434,13 @@ func (w *mainWindow) Window() fyne.Window {
 func (w *mainWindow) ApplySettings(settings Settings) {
 	w.hideOnOpen = settings.HideOnOpen
 	w.showCharacter = settings.ShowCharacter
+	w.PositionX = settings.PositionX
+	w.PositionY = settings.PositionY
+	if w.visible.Load() {
+		if err := window.MoveWindowToPosition(w.window, -1, w.PositionX, w.PositionY); err != nil {
+			log.Printf("应用窗口位置设置失败: %v", err)
+		}
+	}
 	w.refreshPinnedItems()
 }
 

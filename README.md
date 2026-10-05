@@ -45,6 +45,22 @@ NewWind 会在 SDK 报告 IPC 不可用时启动同包的
 `runtime/Everything.exe -startup -first-instance`。它不会安装服务、注册表项或
 开机启动项。
 
+## 窗口位置
+
+窗口会在鼠标所在显示器的可用工作区内按比例定位，任务栏区域不会计入。配置文件
+中的 `window.positionX` 和 `window.positionY` 控制窗口左上角在可移动范围内的位置：
+`0` 表示左侧/顶部，`0.5` 表示居中，`1` 表示右侧/底部。默认值为 `0.5` 和 `0.35`。
+也可以在设置窗口中修改这两个值并保存；窗口会立即移动，新位置同时保存到配置文件。
+
+```json
+{
+  "window": {
+    "positionX": 0.5,
+    "positionY": 0.35
+  }
+}
+```
+
 ## 更新清单
 
 默认更新源已指向本项目的 GitHub Release API：

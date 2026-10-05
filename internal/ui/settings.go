@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -20,6 +21,8 @@ type Settings struct {
 	HideOnOpen    bool
 	ShowCharacter bool
 	MaxResults    int
+	PositionX     float32
+	PositionY     float32
 	Version       string
 }
 
@@ -41,6 +44,10 @@ func (w *mainWindow) showSettings() {
 	hotkey.SetText(settings.ToggleHotkey)
 	maxResults := widget.NewEntry()
 	maxResults.SetText(strconv.Itoa(settings.MaxResults))
+	positionX := widget.NewEntry()
+	positionX.SetText(strconv.FormatFloat(float64(settings.PositionX), 'f', 2, 32))
+	positionY := widget.NewEntry()
+	positionY.SetText(strconv.FormatFloat(float64(settings.PositionY), 'f', 2, 32))
 	showOnStart := widget.NewCheck("启动时显示窗口", nil)
 	showOnStart.SetChecked(settings.ShowOnStart)
 	startAutomaticallyOnBoot := widget.NewCheck("开机自启动", nil)
@@ -78,6 +85,8 @@ func (w *mainWindow) showSettings() {
 	form := dialog.NewForm("设置", "保存", "取消", []*widget.FormItem{
 		widget.NewFormItem("唤起热键", hotkey),
 		widget.NewFormItem("最大搜索结果", maxResults),
+		widget.NewFormItem("窗口位置 X（0-1）", positionX),
+		widget.NewFormItem("窗口位置 Y（0-1）", positionY),
 		widget.NewFormItem("", showOnStart),
 		widget.NewFormItem("", startAutomaticallyOnBoot),
 		widget.NewFormItem("", hideOnOpen),
@@ -93,6 +102,16 @@ func (w *mainWindow) showSettings() {
 			dialog.ShowError(fmt.Errorf("最大搜索结果必须是 10 到 200 之间的整数"), w.window)
 			return
 		}
+		x, err := strconv.ParseFloat(strings.TrimSpace(positionX.Text), 32)
+		if err != nil || math.IsNaN(x) || math.IsInf(x, 0) || x < 0 || x > 1 {
+			dialog.ShowError(fmt.Errorf("窗口位置 X 必须是 0 到 1 之间的数字"), w.window)
+			return
+		}
+		y, err := strconv.ParseFloat(strings.TrimSpace(positionY.Text), 32)
+		if err != nil || math.IsNaN(y) || math.IsInf(y, 0) || y < 0 || y > 1 {
+			dialog.ShowError(fmt.Errorf("窗口位置 Y 必须是 0 到 1 之间的数字"), w.window)
+			return
+		}
 
 		updated := Settings{
 			ToggleHotkey:  strings.TrimSpace(hotkey.Text),
@@ -101,6 +120,8 @@ func (w *mainWindow) showSettings() {
 			HideOnOpen:    hideOnOpen.Checked,
 			ShowCharacter: showCharacter.Checked,
 			MaxResults:    limit,
+			PositionX:     float32(x),
+			PositionY:     float32(y),
 		}
 		if err = w.callbacks.SaveSettings(updated); err != nil {
 			dialog.ShowError(err, w.window)

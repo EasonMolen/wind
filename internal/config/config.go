@@ -31,9 +31,13 @@ type Config struct {
 }
 
 type WindowConfig struct {
-	Title       string  `json:"title"`
-	Width       float32 `json:"width"`
-	Height      float32 `json:"height"`
+	Title  string  `json:"title"`
+	Width  float32 `json:"width"`
+	Height float32 `json:"height"`
+	// PositionX/PositionY locate the window's top-left corner within the
+	// available work area, as fractions of the space in which it can fit.
+	PositionX   float32 `json:"positionX"`
+	PositionY   float32 `json:"positionY"`
 	ShowOnStart bool    `json:"showOnStart"`
 	HideOnOpen  bool    `json:"hideOnOpen"`
 }
@@ -113,6 +117,8 @@ func DefaultConfig() Config {
 			Title:       "NewWind",
 			Width:       760,
 			Height:      520,
+			PositionX:   0.5,
+			PositionY:   0.35,
 			ShowOnStart: true,
 			HideOnOpen:  true,
 		},
@@ -416,6 +422,8 @@ func normalize(cfg Config) Config {
 	if cfg.Window.Height <= 0 {
 		cfg.Window.Height = def.Window.Height
 	}
+	cfg.Window.PositionX = clampPosition(cfg.Window.PositionX)
+	cfg.Window.PositionY = clampPosition(cfg.Window.PositionY)
 	if cfg.Hotkey.Toggle == "" {
 		cfg.Hotkey.Toggle = def.Hotkey.Toggle
 	}
@@ -437,6 +445,16 @@ func normalize(cfg Config) Config {
 
 	cfg.Pins = normalizePins(cfg.Pins)
 	return cfg
+}
+
+func clampPosition(position float32) float32 {
+	if position < 0 {
+		return 0
+	}
+	if position > 1 {
+		return 1
+	}
+	return position
 }
 
 func (s *cfgService) syncPinMap() {

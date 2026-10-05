@@ -22,6 +22,66 @@ const (
 	GWL_EXSTYLE = ^uintptr(19) // -20
 )
 
+// MoveWindowToPosition places the window within the target monitor's work area.
+// x and y are normalized top-left positions from 0 to 1 over the available
+// travel range, so the window remains fully visible on different resolutions.
+func MoveWindowToPosition(win fyne.Window, screenIndex int, x, y float32) error {
+	hwnd := getNativeWindowHandle(win)
+	if hwnd == 0 {
+		titlePtr, _ := syscall.UTF16PtrFromString(win.Title())
+		hwnd, _, _ = procFindWindow.Call(0, uintptr(unsafe.Pointer(titlePtr)))
+	}
+	if hwnd == 0 {
+		return errors.New("failed to get native window handle (HWND)")
+	}
+
+	_, workArea, dpi, err := getTargetMonitorInfo(screenIndex)
+	if err != nil {
+		return err
+	}
+	if dpi == 0 {
+		dpi = 96
+	}
+	size := win.Canvas().Size()
+	if size.Width <= 0 || size.Height <= 0 {
+		size = fyne.NewSize(760, 520)
+	}
+	clientW := int32(size.Width * float32(dpi) / 96)
+	clientH := int32(size.Height * float32(dpi) / 96)
+	fullW, fullH, _, _, err := calcWindowPhysicalMetrics(hwnd, clientW, clientH, dpi)
+	if err != nil {
+		return err
+	}
+	// Position the outer window, accounting for any native frame around the client area.
+	travelX := workArea.Right - workArea.Left - fullW
+	travelY := workArea.Bottom - workArea.Top - fullH
+	if travelX < 0 {
+		travelX = 0
+	}
+	if travelY < 0 {
+		travelY = 0
+	}
+	x = clampUnit(x)
+	y = clampUnit(y)
+	left := workArea.Left + int32(float32(travelX)*x)
+	top := workArea.Top + int32(float32(travelY)*y)
+	ret, _, _ := procSetWindowPos.Call(hwnd, 0, uintptr(left), uintptr(top), uintptr(fullW), uintptr(fullH), SWP_NOZORDER)
+	if ret == 0 {
+		return errors.New("SetWindowPos failed")
+	}
+	return nil
+}
+
+func clampUnit(value float32) float32 {
+	if value < 0 {
+		return 0
+	}
+	if value > 1 {
+		return 1
+	}
+	return value
+}
+
 type MONITORINFO struct {
 	CbSize    uint32
 	RcMonitor RECT
@@ -148,7 +208,7 @@ func getTargetMonitorInfo(screenIndex int) (uintptr, RECT, uint32, error) {
 	}
 
 	hMonitor := monitors[idx]
-	rect, err := getMonitorRect(hMonitor)
+	rect, err := getMonitorWorkArea(hMonitor)
 	if err != nil {
 		return 0, RECT{}, 0, err
 	}
@@ -259,15 +319,15 @@ func getAllMonitorHandles() []uintptr {
 	return monitors
 }
 
-// 通过 HMONITOR 获取显示器物理矩形
-func getMonitorRect(hMonitor uintptr) (RECT, error) {
+// 通过 HMONITOR 获取显示器工作区物理矩形（排除任务栏）
+func getMonitorWorkArea(hMonitor uintptr) (RECT, error) {
 	var info MONITORINFO
 	info.CbSize = uint32(unsafe.Sizeof(info))
 	ret, _, _ := procGetMonitorInfoW.Call(hMonitor, uintptr(unsafe.Pointer(&info)))
 	if ret == 0 {
 		return RECT{}, fmt.Errorf("GetMonitorInfoW failed")
 	}
-	return info.RcMonitor, nil
+	return info.RcWork, nil
 }
 
 // 通过 HMONITOR 获取显示器 DPI

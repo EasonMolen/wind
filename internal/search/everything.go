@@ -22,6 +22,9 @@ import (
 // 进程尚未准备好接受 IPC 查询。
 var ErrIPCUnavailable = errors.New("everything IPC is unavailable")
 
+// ErrDatabaseLoading 表示 Everything 已响应 IPC，但其数据库仍在加载。
+var ErrDatabaseLoading = errors.New("everything database is loading")
+
 // EverythingClient 封装 Everything 客户端（线程安全）
 type EverythingClient struct {
 	mu  sync.Mutex
@@ -35,10 +38,33 @@ var (
 )
 
 type EverythingService interface {
+	Probe() error
 	Search(keyword string) ([]ResultSearch, error)
 
 	CategorySearch(keyword, category string) ([]ResultSearch, error)
 	SetMaxResults(maxResults int)
+}
+
+// Probe checks whether Everything can answer IPC requests and whether its
+// database is ready. Everything_IsDBLoaded distinguishes database loading
+// from a missing Everything IPC endpoint through Everything_GetLastError.
+func (e *EverythingClient) Probe() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if C.Everything_IsDBLoaded() != C.FALSE {
+		return nil
+	}
+
+	errCode := C.Everything_GetLastError()
+	switch errCode {
+	case C.EVERYTHING_OK:
+		return ErrDatabaseLoading
+	case C.EVERYTHING_ERROR_IPC:
+		return fmt.Errorf("%w (error code: %d)", ErrIPCUnavailable, int(errCode))
+	default:
+		return fmt.Errorf("everything readiness probe failed, error code: %d", int(errCode))
+	}
 }
 
 func NewEverythingService(maxResults int) EverythingService {

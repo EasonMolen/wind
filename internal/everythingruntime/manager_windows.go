@@ -1,8 +1,8 @@
 //go:build windows
 
-// Package everythingruntime manages the portable Everything process shipped
-// beside NewWind. It deliberately does not install a Windows service or make
-// registry changes.
+// Package everythingruntime starts an installed Everything instance when
+// available, then falls back to the portable copy shipped beside NewWind. It
+// deliberately does not install a Windows service or make registry changes.
 package everythingruntime
 
 import (
@@ -12,7 +12,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
+
+	"golang.org/x/sys/windows/registry"
 )
 
 var ErrRuntimeNotFound = errors.New("portable Everything runtime was not found")
@@ -33,11 +36,12 @@ func DefaultExecutablePath() string {
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(filepath.Dir(executable), "runtime", "Everything.exe")
+	return filepath.Join(filepath.Dir(executable), "runtime", "everything.exe")
 }
 
-// Start launches Everything without showing its search window. -first-instance
-// makes the command a no-op if an Everything instance is already available.
+// Start launches Everything without showing its search window. An installed
+// copy is preferred to the bundled portable copy. The context controls whether
+// launch may begin; canceling it must not stop the background process.
 func (m *Manager) Start(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -45,19 +49,71 @@ func (m *Manager) Start(ctx context.Context) error {
 	if m.started {
 		return nil
 	}
-	if m.executablePath == "" {
-		return ErrRuntimeNotFound
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	info, err := os.Stat(m.executablePath)
-	if err != nil || info.IsDir() {
-		return fmt.Errorf("%w: %s", ErrRuntimeNotFound, m.executablePath)
+	candidates := []string{installedExecutablePath(), m.executablePath}
+	var startErrors []error
+	seen := make(map[string]struct{}, len(candidates))
+	for _, executable := range candidates {
+		if executable == "" {
+			continue
+		}
+		key := strings.ToLower(filepath.Clean(executable))
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+
+		info, err := os.Stat(executable)
+		if err != nil || info.IsDir() {
+			startErrors = append(startErrors, fmt.Errorf("Everything executable not found: %s", executable))
+			continue
+		}
+
+		// This is a long-lived background process. CommandContext would kill it
+		// as soon as the caller's short startup timeout is canceled.
+		cmd := exec.Command(executable, "-startup", "-first-instance")
+		cmd.Dir = filepath.Dir(executable)
+		if err = cmd.Start(); err != nil {
+			startErrors = append(startErrors, fmt.Errorf("start Everything from %s: %w", executable, err))
+			continue
+		}
+
+		m.started = true
+		go func() {
+			_ = cmd.Wait()
+			m.mu.Lock()
+			m.started = false
+			m.mu.Unlock()
+		}()
+		return nil
 	}
 
-	cmd := exec.CommandContext(ctx, m.executablePath, "-startup", "-first-instance")
-	cmd.Dir = filepath.Dir(m.executablePath)
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start portable Everything: %w", err)
+	if len(startErrors) == 0 {
+		return ErrRuntimeNotFound
 	}
-	m.started = true
-	return nil
+	return errors.Join(startErrors...)
+}
+
+func installedExecutablePath() string {
+	const installRegistryPath = `SOFTWARE\voidtools\Everything`
+	for _, view := range []uint32{registry.WOW64_64KEY, registry.WOW64_32KEY, 0} {
+		key, err := registry.OpenKey(registry.LOCAL_MACHINE, installRegistryPath, registry.QUERY_VALUE|view)
+		if err != nil {
+			continue
+		}
+		location, _, err := key.GetStringValue("InstallLocation")
+		key.Close()
+		if err != nil || strings.TrimSpace(location) == "" {
+			continue
+		}
+
+		executable := filepath.Join(location, "Everything.exe")
+		info, err := os.Stat(executable)
+		if err == nil && !info.IsDir() {
+			return executable
+		}
+	}
+	return ""
 }

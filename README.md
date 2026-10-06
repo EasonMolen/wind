@@ -41,9 +41,10 @@ licenses/
 README.md
 ```
 
-NewWind 会在 SDK 报告 IPC 不可用时启动同包的
-`runtime/Everything.exe -startup -first-instance`。它不会安装服务、注册表项或
-开机启动项。
+NewWind 会优先连接已运行的 Everything；如果没有可用 IPC，则先尝试启动已安装的
+Everything，找不到已安装版本时再启动同包的 `runtime/Everything.exe`。数据库初次
+建立索引时，NewWind 会提示索引仍在加载，而不会把它报告为搜索不可用。NewWind 不会
+安装服务、修改注册表项或设置开机启动项。
 
 ## 窗口位置
 

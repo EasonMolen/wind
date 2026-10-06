@@ -114,10 +114,9 @@ func (a *App) Run() error {
 	if err := a.registerToggleHotkey(); err != nil {
 		return err
 	}
-	// Start the bundled portable search engine before the main window becomes
-	// interactive. Manager.Start only creates the background process; it does
-	// not wait for Everything to exit or show an Everything search window.
-	a.startPortableEverything()
+	// Prefer an already-running Everything instance. When none is available,
+	// the manager starts an installed copy first, then the bundled portable one.
+	a.startPreferredEverything()
 
 	go func() {
 		if err := a.hotkey.Listen(a.ctx); err != nil {
@@ -134,17 +133,22 @@ func (a *App) Run() error {
 	return nil
 }
 
-func (a *App) startPortableEverything() {
-	if a.runtime == nil {
+func (a *App) startPreferredEverything() {
+	if a.runtime == nil || a.everything == nil {
 		return
 	}
+	probeErr := a.everything.Probe()
+	if !errors.Is(probeErr, search.ErrIPCUnavailable) {
+		if probeErr != nil && !errors.Is(probeErr, search.ErrDatabaseLoading) {
+			log.Printf("检查 Everything 状态失败: %v", probeErr)
+		}
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(a.ctx, 3*time.Second)
 	defer cancel()
 	if err := a.runtime.Start(ctx); err != nil {
-		// A developer may run from source without runtime/Everything.exe, or a
-		// user may already rely on a separately installed Everything instance.
-		// Search remains available in the latter case, so startup is non-fatal.
-		log.Printf("启动内置 Everything 失败: %v", err)
+		log.Printf("启动 Everything 失败: %v", err)
 	}
 }
 
@@ -186,7 +190,9 @@ func (a *App) search(keyword string) ([]ui.ResultItem, error) {
 		return a.everything.Search(keyword)
 	})
 	if err != nil {
-		log.Printf("search failed: %v", err)
+		if !errors.Is(err, search.ErrDatabaseLoading) {
+			log.Printf("search failed: %v", err)
+		}
 		return nil, err
 	}
 
@@ -213,7 +219,9 @@ func (a *App) categorySearch(keyword, category string) ([]ui.ResultItem, error) 
 		return a.everything.CategorySearch(keyword, category)
 	})
 	if err != nil {
-		log.Printf("categorySearch failed: %v", err)
+		if !errors.Is(err, search.ErrDatabaseLoading) {
+			log.Printf("categorySearch failed: %v", err)
+		}
 		return nil, err
 	}
 
@@ -231,34 +239,54 @@ func (a *App) categorySearch(keyword, category string) ([]ui.ResultItem, error) 
 	return items, nil
 }
 
-// queryEverything retries once the portable runtime is requested. The SDK DLL
-// only proxies IPC, so a successful process start still needs a short wait for
-// Everything to create its IPC endpoint and load its index.
+// queryEverything checks database readiness before issuing a blocking SDK
+// query. This prevents the index's initial load from looking like a query
+// timeout to the user.
 func (a *App) queryEverything(query func() ([]search.ResultSearch, error)) ([]search.ResultSearch, error) {
-	results, err := query()
-	if !errors.Is(err, search.ErrIPCUnavailable) || a.runtime == nil {
-		return results, err
+	if a.everything == nil {
+		return query()
+	}
+
+	probeErr := a.everything.Probe()
+	if probeErr == nil {
+		return query()
+	}
+	if errors.Is(probeErr, search.ErrDatabaseLoading) {
+		return nil, probeErr
+	}
+	if !errors.Is(probeErr, search.ErrIPCUnavailable) {
+		return nil, probeErr
+	}
+	if a.runtime == nil {
+		return nil, probeErr
 	}
 
 	startCtx, cancel := context.WithTimeout(a.ctx, 3*time.Second)
-	defer cancel()
-	if startErr := a.runtime.Start(startCtx); startErr != nil {
-		return nil, fmt.Errorf("Everything 未运行且内置运行时无法启动: %w", startErr)
+	startErr := a.runtime.Start(startCtx)
+	cancel()
+	if startErr != nil {
+		return nil, fmt.Errorf("Everything 未运行且无法启动: %w", startErr)
 	}
 
-	for attempt := 0; attempt < 8; attempt++ {
+	for attempt := 0; attempt < 15; attempt++ {
 		select {
 		case <-a.ctx.Done():
 			return nil, a.ctx.Err()
-		case <-time.After(400 * time.Millisecond):
+		case <-time.After(200 * time.Millisecond):
 		}
 
-		results, err = query()
-		if !errors.Is(err, search.ErrIPCUnavailable) {
-			return results, err
+		probeErr = a.everything.Probe()
+		if probeErr == nil {
+			return query()
+		}
+		if errors.Is(probeErr, search.ErrDatabaseLoading) {
+			return nil, probeErr
+		}
+		if !errors.Is(probeErr, search.ErrIPCUnavailable) {
+			return nil, probeErr
 		}
 	}
-	return nil, fmt.Errorf("Everything 正在启动或建立索引，请稍后重试: %w", err)
+	return nil, fmt.Errorf("Everything 启动后仍未响应 IPC: %w", search.ErrIPCUnavailable)
 }
 
 func (a *App) open(itemFullPath string) {

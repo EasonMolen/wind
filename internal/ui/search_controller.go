@@ -1,9 +1,12 @@
 package ui
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
+	"wind/internal/search"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/widget"
@@ -120,7 +123,16 @@ func (w *mainWindow) applySearchResults(seq uint64, category string, results []R
 	w.results = results
 	w.list.Refresh()
 	if err != nil {
-		w.status.SetText("搜索不可用: " + err.Error())
+		switch {
+		case errors.Is(err, search.ErrDatabaseLoading):
+			w.status.SetText("Everything 正在建立索引，完成后即可搜索")
+		case errors.Is(err, context.DeadlineExceeded):
+			w.status.SetText("Everything 响应超时，请稍后重试")
+		case errors.Is(err, search.ErrIPCUnavailable):
+			w.status.SetText("正在启动 Everything 搜索服务，请稍后重试")
+		default:
+			w.status.SetText("搜索失败: " + err.Error())
+		}
 		return
 	}
 	w.status.SetText(w.resultStatusText(category, len(results)))

@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows tests
+    runs-on: windows-2025
+    env:
+      CGO_ENABLED: '1'
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Prepare verified Everything dependencies
+        run: ./scripts/prepare-ci-dependencies.ps1
+
+      - name: Configure MinGW for cgo
+        run: |
+          $gccCandidates = @(
+            'C:\mingw64\bin',
+            'C:\msys64\mingw64\bin',
+            'C:\msys64\ucrt64\bin'
+          )
+          $gccDirectory = $gccCandidates | Where-Object { Test-Path (Join-Path $_ 'gcc.exe') } | Select-Object -First 1
+          if (-not $gccDirectory) { throw 'A MinGW-w64 gcc.exe compiler is required for cgo.' }
+          Add-Content -LiteralPath $env:GITHUB_PATH -Value $gccDirectory
+          Add-Content -LiteralPath $env:GITHUB_PATH -Value $env:GITHUB_WORKSPACE
+
+      - name: Run Go tests
+        run: |
+          go version
+          gcc --version
+          go test ./...

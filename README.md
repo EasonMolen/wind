@@ -25,11 +25,35 @@ SDK 的 IPC 客户端；实际搜索还需要一个正在后台运行的 Everyth
 1. 从 voidtools 下载官方 x64 portable Everything 包，审阅其再分发许可。
 2. 将 `Everything.exe`（以及可选的 `Everything.lng`）放入 `runtime/`，并将官方许可证文本放入
    `third_party/licenses/`。
-3. 执行：
+3. 本地打包时，执行：
 
    ```powershell
-   .\scripts\package.ps1 -Version 0.1.0
+   .\scripts\package.ps1 -Version 1.0.1
    ```
+
+版本号使用 `major.minor.patch`，正式发布以 Git 标签为唯一来源。不要使用随机数或构建时间
+作为产品版本：它们不能替代发布顺序，也可能与更新检查读取的 Release 标签不一致。本地包的
+版本由 `-Version` 指定；正式包则由发布标签自动生成。
+
+GitHub Actions 中的 `CI` 工作流会在推送和 Pull Request 上准备校验过的 Everything 依赖并运行
+`go test ./...`。向 `main` 推送普通提交只运行 CI；只有使用发布提交信息时才会发布：
+
+```powershell
+git add .
+git commit -m "new version"
+git push github main
+```
+
+`new version` 默认升 patch 版本。需要升 minor 或 major 时，提交信息分别使用
+`release: minor ...` 或 `release: major ...`，例如 `git commit -m "release: minor add plugin API"`。
+工作流从现有 Git 标签计算下一个 `major.minor.patch` 版本，测试通过后把该版本注入程序并生成 ZIP，
+然后在 GitHub 自动创建 `v<版本号>` 标签和 Release，附带 ZIP 与 SHA-256 文件。你不需要本地手写版本号或
+执行 `git tag`。普通提交不会发布；失败的测试或打包也不会创建版本标签。
+
+版本标签是正式版本号的唯一来源。Release 工作流兼容仓库里已有的四段历史标签（如
+`v1.0.1.2026100602`），但新版本统一采用三段 SemVer。不要复用已发布的版本标签；修复或重发内容时应
+递增版本。`config.json` 不保存程序版本；其中的 `update.manifestUrl` 只指定更新检查地址。
+自动创建的远端标签不会自动出现在你的本地仓库；需要时可执行 `git fetch github --tags`。
 
 产物为 `dist/NewWind-<version>-windows-amd64.zip`，包含：
 
@@ -37,6 +61,7 @@ SDK 的 IPC 客户端；实际搜索还需要一个正在后台运行的 Everyth
 NewWind.exe
 Everything64.dll
 runtime/Everything.exe
+VERSION.txt
 licenses/
 README.md
 ```
@@ -70,9 +95,8 @@ Everything，找不到已安装版本时再启动同包的 `runtime/Everything.e
 https://api.github.com/repos/EasonMolen/wind/releases/latest
 ```
 
-不需要另建 manifest。请为每个 Release 使用语义化标签（例如 `v0.1.0`），并上传
-名称包含 `windows-amd64` 的 ZIP 资源；程序会读取 GitHub 的 `tag_name`、发布说明和
-对应 ZIP 下载地址。
+不需要另建 manifest。Release 工作流使用 Git 标签（例如 `v1.0.2`）作为版本，并自动上传同版本
+的 ZIP 和 SHA-256 校验文件。程序会读取 GitHub 的 `tag_name`、发布说明和对应 ZIP 下载地址。
 
 如需改用自建更新源，可在 `config.json` 中覆盖：
 

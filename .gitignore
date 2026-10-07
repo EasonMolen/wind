@@ -51,3 +51,4 @@ runtime/
 *.zip
 *.lnk
 hide_task_windows
+build.md

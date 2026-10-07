@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidatePattern('^v?\d+\.\d+\.\d+([-.][0-9A-Za-z.-]+)?$')]
+    [ValidatePattern('^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$')]
     [string]$Version,
     [switch]$SkipTests
 )
@@ -36,12 +36,19 @@ New-Item -ItemType Directory -Path (Join-Path $releaseDirectory 'licenses') | Ou
 Push-Location $projectRoot
 try {
     if (-not $SkipTests) {
-        go test ./internal/config ./internal/hotkey ./internal/launcher ./internal/ui
+        go test ./...
+        if ($LASTEXITCODE -ne 0) {
+            throw "go test failed with exit code $LASTEXITCODE"
+        }
     }
 
     $ldflags = "-H windowsgui -X wind/internal/buildinfo.Version=$releaseVersion"
-    go build -trimpath -ldflags $ldflags  -o (Join-Path $releaseDirectory 'NewWind.exe') ./cmd/launcher
+    go build -trimpath -buildvcs=true -ldflags $ldflags -o (Join-Path $releaseDirectory 'NewWind.exe') ./cmd/launcher
+    if ($LASTEXITCODE -ne 0) {
+        throw "go build failed with exit code $LASTEXITCODE"
+    }
 
+    Set-Content -LiteralPath (Join-Path $releaseDirectory 'VERSION.txt') -Value $releaseVersion -Encoding ascii
     Copy-Item -LiteralPath $sdkDll -Destination (Join-Path $releaseDirectory 'Everything64.dll')
     Copy-Item -LiteralPath $runtimeExecutable -Destination (Join-Path $releaseDirectory 'runtime\Everything.exe')
     if (Test-Path -LiteralPath $runtimeLanguagePack -PathType Leaf) {
@@ -57,4 +64,5 @@ finally {
     Pop-Location
 }
 
+Write-Host "Release version: $releaseVersion"
 Write-Host "Portable package created: $releaseArchive"

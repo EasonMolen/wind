@@ -11,7 +11,7 @@ func TestBuildCategorySearchQuery(t *testing.T) {
 		wantErr  bool
 	}{
 		{name: "all results", keyword: "report", want: "report"},
-		{name: "category with keyword", keyword: "report", category: "document", want: "report ext:doc;docx;xls;xlsx;ppt;pptx;pdf;txt;rtf;odt;ods;odp"},
+		{name: "category with keyword", keyword: "report", category: "document", want: "report ext:doc;docx;xls;xlsx;ppt;pptx;pdf;txt;md;rtf;odt;ods;odp"},
 		{name: "category without keyword", category: "folder", want: "folder:"},
 		{name: "unknown category", keyword: "report", category: "missing", wantErr: true},
 	}

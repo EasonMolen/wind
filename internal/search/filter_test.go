@@ -6,6 +6,18 @@ import (
 	"testing"
 )
 
+func TestFilterKeepsChineseMarkdownDocument(t *testing.T) {
+	for _, keyword := range []string{"触发器禁用", "触发器"} {
+		t.Run(keyword, func(t *testing.T) {
+			results := []ResultSearch{{FullPath: `E:\Typora\触发器禁用.md`, FileName: "触发器禁用.md", Path: `E:\Typora`}}
+			got := NewFilterEngine(20).Filter(results, keyword)
+			if len(got) != 1 || got[0].FullPath != `E:\Typora\触发器禁用.md` {
+				t.Fatalf("document was filtered out for %q: %#v", keyword, got)
+			}
+		})
+	}
+}
+
 func TestFilterKeepsApplicationsAndRemovesSystemNoise(t *testing.T) {
 	engine := NewFilterEngine(20)
 	results := []ResultSearch{

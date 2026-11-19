@@ -48,6 +48,7 @@ type Checker struct {
 
 func (c Checker) Check(ctx context.Context) (Result, error) {
 	current := normalizeVersion(c.CurrentVersion)
+
 	if strings.TrimSpace(c.ManifestURL) == "" {
 		return Result{CurrentVersion: current}, ErrNotConfigured
 	}
@@ -60,6 +61,7 @@ func (c Checker) Check(ctx context.Context) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("create update request: %w", err)
 	}
+
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "NewWind-update-checker")
 	response, err := client.Do(req)
@@ -82,6 +84,7 @@ func (c Checker) Check(ctx context.Context) (Result, error) {
 	if latest == "" {
 		return Result{}, errors.New("update response does not contain a version or GitHub tag_name")
 	}
+
 	available, err := newerThan(latest, current)
 	if err != nil {
 		return Result{}, err

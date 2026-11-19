@@ -24,7 +24,7 @@ type CategoryDefinition struct {
 }
 
 var categoryDefinitions = []CategoryDefinition{
-	{ID: "document", Label: "文档", Query: "ext:doc;docx;xls;xlsx;ppt;pptx;pdf;txt;rtf;odt;ods;odp"},
+	{ID: "document", Label: "文档", Query: "ext:doc;docx;xls;xlsx;ppt;pptx;pdf;txt;md;rtf;odt;ods;odp"},
 	{ID: "executable", Label: "可执行", Query: "ext:exe;msi;bat;cmd;com;scr"},
 	{ID: "compressedPackage", Label: "压缩包", Query: "ext:zip;rar;7z;tar;gz;bz2;xz;iso"},
 	{ID: "image", Label: "图片", Query: "ext:jpg;jpeg;png;gif;bmp;svg;webp;ico;tiff"},
